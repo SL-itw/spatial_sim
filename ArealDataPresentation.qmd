@@ -1,0 +1,348 @@
+---
+title: "Areal Simulation"
+format: revealjs
+editor: visual
+---
+
+## Areal Data
+
+-   The goal of modeling Areal data is to understand a lattice's spatial auto correlation with the idea that polygons closer together would share more similarity in their measurement values than farther away
+-   Modeling Areal data can be used for disease mapping, ecological regression, other epidemiological use cases to name a few
+
+![Pennsylvania](./images/mapsirs-1.png)
+
+## Spatial Auto Correlation
+
+-   Oftentimes it can be found that after adjusting for covariates some of the variance unexplained may be due to **proximity**; spatial correlation.
+-   Not accounting for spatial auto correlation violates the assumption of independence among the observations for regression models
+-   The effect of spatial auto correlation can be accounted for by modeling correlated random effects and further augmenting the linear relationship between the outcome and covariates.
+
+## Conditional Autoregressive Models
+
+-   The random effect component of a linear model can be modeled using conditonal autogression developed by Besag, York, and Mollie in 1991
+-   Essentially the random effects smooth the outcome based on the priors specified in a Bayesian Hierarchical Modeling setting
+-   The advantage of the Bayesian modeling framework is that we can use priors to smooth the predicted outcome values globally as early methods do, or locally know that some areas may be prone to more or less spatial auto correlation based on landscaping (separated by mountains, lakes, desert)
+
+## Model Specification
+
+-   Spatial Units: Let $S$ be a set of areal units $k$ from 1:$n$.
+-   Outcome: Let $Y$ be the dependent variable with $n$ values that can be described by a multivariate distribution 
+-   Design Matrix: Let $X$ be a set of $p$ covariates with $n$ observations
+
+------------------------------------------------------------------------
+
+-   Random effects: Let $\phi$ be a random effect for each $k$ spatial unit
+-   Offset Term: Let $O$ be a set of offset terms for each $k$ spatial unit
+
+$$
+\begin{align}
+Y_k|\mu_k &\sim f(Y_k|\mu_k,\sigma^2) \; for \; k \in1,...,n,\\
+g(\mu_k) &= x^T_k \beta +\phi_k + O_k
+\end{align}
+$$
+
+## Prior Specification 1
+
+-   For each $\beta_k$ there is a normal distributional assumption with mean 0 and large variance
+-   General random effect prior in the multivariate case
+
+$$
+\phi \sim N(0, \tau^2Q^{-1})
+$$
+
+------------------------------------------------------------------------
+
+Where $Q$ is a precision matrix that influence the spatial correlation for intrinsic models based on a weight matrix $W$ that is a binary matrix of each $S_k,S_{j\neq k}$ according to the geographical **contigueity** leading to a Global CAR Prior
+
+$$
+\phi_k | \phi_{-k} \sim N(\frac{\sum_i^n W_{ki}\phi_i}{\sum^n_iW_{ki}},\frac{\tau^2}{\sum_i^nW_{ki}})
+$$
+
+::: callout-note
+Average random effect with respect to its neighbors but may be overly smooth
+:::
+
+## Prior Specification 2
+
+-   Prior should account for varying levels of auto correlation; suggest by Lerox, et.al 1999
+
+$$
+\phi_k | \phi_{-k} \sim N(\rho \frac{\sum_i^n W_{ki}\phi_i}{\rho\sum^n_iW_{ki}+1-\rho},\frac{\tau^2}{\rho\sum_i^nW_{ki}+1-\rho})
+$$ - Deemed to be the most effective until now
+
+## Prior Specification 3
+
+-   Local Priors will be covered here in more detail
+-   Note that these priors actually account for physical boundaries (lakes, rail roads, etc..) between area units measured as dissimilarities
+
+## Simulating Spatial Data {.smaller}
+
+$$
+\phi_i | \phi_{j\neq i}\sim N(\bar \phi_i,\frac{\tau^2}{m_i})
+$$
+
+Where $\phi$ is the spatial random effects and $i$ indexes the areal unit and $j$ its neighbors. Then $\bar \phi$ is the average value of the neighbors $j$ of $i$, and $m_i$ is the number of neighbors of areal unit $i$. 
+
+Then
+$$
+p(\phi)\propto e^{-(\phi-\mu1)^TM^{-1}(I-A)(\phi-\mu1)/2}
+
+$$
+where $A = \rho Diag(1/w_{i+})W$ and $M^{-1} = \tau^{-2}Diag(w_{i+})$ where $w_{i+}=m_i$. Now we determine the covariance matrix of $\phi$ as $(C(\alpha) =\tau^2[Diag(w_{i+})-\rho W]^{-1} )$.  
+
+```{r}
+#| message: false
+#| warning: false
+#| echo: false
+
+
+packages <- c("tidyverse","patchwork", "spdep" )
+invisible(lapply(packages, library, character.only = T))
+
+```
+
+
+Using definitions based on pg 6 from Hierarchical modeling.. Banerjee et.al.
+
+Bounds on $\rho$ are:
+
+$$
+\rho \in (\frac{1}{\lambda_{(1)}},\frac{1}{\lambda_{(p)}}) 
+$$
+```{r}
+
+c_r = function(tau, rho, W){
+  
+  M = diag(rowSums(W))
+  E_inv =  M - rho*W
+
+    tau^2 * solve(E_inv)
+  
+}
+
+
+
+
+c_a_1 = function(tau, rho, W){
+  
+ 
+  M = diag(rowSums(W))
+ # sqrt(M) %*% sqrt(M)
+  M_in = solve(sqrt(M)) # use chulvesky decomposition for sqrt of matrices
+  eigens = eigen(M_in%*%W%*%M_in)$values
+  
+  if (rho >= 1/min(eigens) & rho <= 1/max(eigens) ){
+    E_inv =  M - rho*W
+  }else{
+    # just move rho to the min if it is less than and then generate a warning not stop the function, and vise-versa
+    stop( paste0("rho should be between ", min(eigens)," and ",max(eigens)))
+  }
+  
+
+
+    tau^2 * solve(E_inv)
+  
+}
+
+c_a_2 = function(tau, alpha, W){
+  
+  
+   M_w = diag(1/rowSums(W))
+   M = diag(rowSums(W))
+   M_in =solve(M) # same as M_w
+   W_star = M_w%*%W # row stochastic; all rows sum to 1
+   I = diag(c(rep(1,dim(W)[1])))
+   inner_mat = I - alpha*W_star
+  E_inv = M_in%*%inner_mat
+  
+  tau^2 * solve(E_inv)
+  
+ 
+}
+
+
+#  Defines spatial map; contiguity of the areal units. 
+
+
+W = matrix(c(0,1,0,1, 1,0,0,1, 0,0,0,1, 1,1,1,0  ), byrow = T, nrow = 4, ncol = 4)
+
+C_r = c_r(0.2,
+# look into how to set errors for specifications of rho
+          0.8
+          ,W)
+
+C_a_1 = c_a_1(0.2,
+# look into how to set errors for specifications of rho
+          0.8
+          ,W)
+
+C_a_2 = c_a_2(0.2,0.8,W)
+```
+
+------------------------------------------------------------------------
+
+-   Spatial data centered at 0, being 2 data points for each of the 4 areas.
+
+```{r}
+#| echo: true
+cov2cor(C_a_1)
+cov2cor(C_a_2)
+
+set.seed(1234)
+sim_data1 <- mnormt::rmnorm(n = 10000, mean = rep(0,4), varcov = C_r)
+sim_data3 <- mnormt::rmnorm(n = 10000, mean = rep(0,4), varcov = C_a_1)
+sim_data2 <- mnormt::rmnorm(n = 10000, mean = rep(0,4), varcov = C_a_2)
+
+```
+
+## Recovering the spatial matrix
+
+
+```{r}
+cov(sim_data1) 
+C_r
+
+cov(sim_data3) 
+C_a_1
+
+# next fit the model and recover estimates of tau and rho 
+```
+
+
+## Simulating Real Spatial Data
+
+```{r}
+
+# generate data for census tracks of Brooklyn
+# plot the data on the map 
+
+shore_shp <- sf::st_read("./data/nyct2020_23d/nyct2020.shp") %>%  
+                                    mutate(
+                                           county = case_when(BoroCode == 2 ~ 36005,
+                                                              BoroCode == 3 ~ 36047,
+                                                              BoroCode == 1 ~ 36061,
+                                                              BoroCode == 4 ~ 36081,
+                                                              BoroCode == 5 ~ 36085),
+                                    
+                                           GEOID = str_c(county,CT2020)) %>% 
+                                  mutate(GEOID = as.numeric(GEOID)) %>% 
+                                    sf::st_transform(., "+proj=longlat +datum=WGS84") %>%  
+                                    sf::st_transform( 4326)
+
+acs_vars <- c(pop= "B01003_001")
+census_key <- "da78adf0d44806a4957cf7805559f170ba2c69e7"
+acs_check1 <- str_detect(acs_vars, '_0[0-9][0-9]$')
+if (any(acs_check1==FALSE)) {
+    cat(acs_vars[which(acs_var_check1==FALSE)], '\n')
+    stop('PLEASE REVIEW ACS VARIABLE IDS or add underscore before last 3 numbers')
+}
+# PULL ACS DATA
+############################################
+acs_raw <- tidycensus::get_acs(
+    survey='acs5',
+    variables=acs_vars,
+    geography='tract',
+    state=c('NY'),
+    year=2020, #changed from 2019 to 2020 because new development may have include more island residence.
+    key=Sys.getenv('census_key'),
+) %>%
+    rename_all(str_to_lower) %>%
+ # select(-moe) %>%
+  group_by(geoid, name) %>%
+  pivot_wider(
+    values_from = "estimate",
+    names_from = "variable"
+  ) %>%
+  filter(substr(geoid,1,5) %in% c(36005,36047,36061,36081,36085 ))
+
+map = tigris::geo_join(
+  shore_shp,
+  acs_raw %>% mutate(geoid = as.numeric(geoid)),
+  by_sp = "GEOID",
+  by_df = "geoid",
+  how = "inner"
+) 
+
+
+
+set.seed(1234)
+
+gen_map = map %>% mutate(
+  strong = gen_vec(.,tau = 1, rho = 0.8),
+  weak = gen_vec(.,tau = 1, rho = -0.2))
+
+
+```
+
+```{r}
+
+
+
+gen_map %>% 
+  ggplot()+
+  geom_sf(aes(fill=strong), size =0.01)+
+  
+gen_map %>% 
+  ggplot()+
+  geom_sf(aes(fill = weak), size =0.01)
+
+
+
+
+```
+
+
+```{r}
+
+spdep::moran.test(gen_map$strong %>% na.omit(), 
+                  nb2listw(include.self(poly2nb(gen_map, queen = T)),zero.policy = T) , alternative = "greater")
+
+
+spdep::moran.test(gen_map$weak%>% na.omit(), 
+                  nb2listw(include.self(poly2nb(gen_map, queen = T)),zero.policy = T) , alternative = "greater")
+
+```
+
+
+
+```{r}
+nb <- spdep::poly2nb(gen_map, queen = T )
+W = as.matrix(spdep::nb2mat(nb, style = "B",zero.policy = T))
+no_neighborhos = tibble(zero = nb == "0") %>% mutate( id = row_number()) %>% filter(zero == T) %>% pull(id)
+  W_small = W[-no_neighborhos,-no_neighborhos]
+M = diag(rowSums(W_small))
+M_vec = diag(M)
+M_in = diag(1/(sqrt(M_vec)))
+  matrix_check = M_in %*% W_small %*% M_in
+  eigens = eigen(matrix_check,only.values = T,symmetric = F)$values
+  min_eigen = min(eigens)
+  max_eigen = max(eigens)
+
+stan_data <- list(
+  n = dim(W_small)[1],
+  M = M_vec,
+  W = W_small,
+  lmin = min_eigen,
+  lmax = max_eigen,
+  y = gen_map %>% sf::st_drop_geometry() %>% pull(strong) %>% na.omit()
+)
+require(rstan) 
+stanc(file = "carmodl.stan")
+stan_code = "data {\n  int<lower=1> n;\n  vector[n] M;\n  real lmin;\n  real lmax;\n  matrix<lower=0, upper=1>[n, n] W;\n  vector[n] y;\n}\nparameters {\n  real<lower=0, upper=1> rho;\n}\ntransformed parameters {\n  vector[n] mu;\n  vector[n] sigma;\n  sigma = rep_vector(1/dot_self(M),n);\n  mu = rho * (W * y) ./M;\n}\nmodel {\n  rho ~ uniform(1/lmin,1/lmax);\n  y ~ multi_normal(mu, diag_matrix(sigma));\n}"
+model <- stan_model(model_code = stan_code)
+
+MCMC_fit <- sampling(model, 
+                data = stan_data, iter = 10000, chains = 4,
+                pars = c("rho"))
+
+vb_fit <- rstan::vb(model,
+                data = stan_data,
+                pars = c("rho"))
+
+rstan::summary(MCMC_fit,
+               pars = c("rho"))
+
+rstan::summary(vb_fit,
+               pars = c("rho"))
+```
+
