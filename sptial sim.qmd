@@ -1,0 +1,71 @@
+---
+title: "Areal Data Simulation"
+format: html
+editor: visual
+---
+
+Areal data follows an intrinsic auto-regressive process. There are a few parameters that govern this proccess.
+
+$N$ is the areal points or centroids of similar unit areas. $n_i$ is a areal point $i$. $n_j$ is an areal point $j\neq i$ $W_{ij}$ is the matrix for each $j$ neighbors of $i$.
+
+For example, consider a matrix who's columns are the indication of nieghboring one another. If there were 3 areas, area 1 would have 1 neighbor being area 2. Then area 2 would also have 1 neighbor being area 1 and another being area 3, and lastly area 3 has 1 neighbor being area 2.
+
+$$
+\begin{bmatrix}
+0&1&1\\1&0&0\\0&1&0
+\end{bmatrix}
+$$
+
+Considering neighborhoods functionally we have that
+
+$$ 
+n_i | n_j, j\neq i, \sim N(\sum_j W_{ij}n_j,\sigma^2)
+$$ However, the joint distribution of n is
+
+$$
+n \sim N(\bf0, \Sigma)
+$$ Following our earlier example, $\Sigma =Q^{-1}$ and $D$ is as followed:
+
+$$
+Q= [D_\tau (I-\alpha B)]\\
+D = \begin{bmatrix}
+1&0&0\\0&1&0\\0&0&2
+\end{bmatrix}
+$$ Where $a$ is the amount of spatial correlation and $B=D^{-1}W$ and $I$ is an identity matrix.
+
+\$\$
+
+Q = D\_\tau
+
+\begin{bmatrix}
+
+1-0.3&0&0\\0&1-0.2&0\\0 &0& 1-0.4
+\end{bmatrix}
+
+\$\$
+
+Either specify an geoagraphy with number of area and neighbors for each or use a map that is prespecified.
+
+Simulating spatial data with Rstan
+
+\$\$
+
+\begin{bmatrix}
+1 &0.3 &0\\0.3 & 1 & 0.3\\0 & 0.3 & 1
+\end{bmatrix}
+
+\$\$
+
+```{r}
+
+N = 3
+
+N_edges = c(1,2,1)
+
+# use a correlation matrix
+# generat y's based on correltion matrix 
+# model the y's and the space to estimate the correlation matrix 
+# compare fixed correlation matrix with the predicted 
+
+
+```

@@ -1,0 +1,2988 @@
+---
+title: "spatial_sim_stan"
+output: html_document
+date: "2024-01-30"
+---
+
+```{r}
+#| message: false
+#| warning: false
+#| echo: false
+
+
+packages <- c("tidyverse","patchwork", "spdep","INLA","future","future.apply","qs" )
+invisible(lapply(packages, library, character.only = T))
+
+```
+
+## Maps
+
+### Complete Map
+
+```{r}
+
+# generate data for census tracks of Brooklyn
+# plot the data on the map 
+
+shore_shp <- sf::st_read("./data/nyct2020_23d/nyct2020.shp") %>%  
+                                    mutate(
+                                           county = case_when(BoroCode == 2 ~ 36005,
+                                                              BoroCode == 3 ~ 36047,
+                                                              BoroCode == 1 ~ 36061,
+                                                              BoroCode == 4 ~ 36081,
+                                                              BoroCode == 5 ~ 36085),
+                                    
+                                           GEOID = str_c(county,CT2020)) %>% 
+                                  mutate(GEOID = as.numeric(GEOID)) %>% 
+                                    sf::st_transform(., "+proj=longlat +datum=WGS84") %>%  
+                                    sf::st_transform( 4326)
+
+acs_vars <- c(pop= "B01003_001")
+census_key <- "da78adf0d44806a4957cf7805559f170ba2c69e7"
+acs_check1 <- str_detect(acs_vars, '_0[0-9][0-9]$')
+if (any(acs_check1==FALSE)) {
+    cat(acs_vars[which(acs_var_check1==FALSE)], '\n')
+    stop('PLEASE REVIEW ACS VARIABLE IDS or add underscore before last 3 numbers')
+}
+# PULL ACS DATA
+############################################
+acs_raw <- tidycensus::get_acs(
+    survey='acs5',
+    variables=acs_vars,
+    geography='tract',
+    state=c('NY'),
+    year=2020, #changed from 2019 to 2020 because new development may have include more island residence.
+    key=Sys.getenv('census_key'),
+) %>%
+    rename_all(str_to_lower) %>%
+ # select(-moe) %>%
+  group_by(geoid, name) %>%
+  pivot_wider(
+    values_from = "estimate",
+    names_from = "variable"
+  ) %>%
+  filter(substr(geoid,1,5) %in% c(36005,36047,36061,36081,36085 ))
+
+map_c = tigris::geo_join(
+  shore_shp
+  ,
+  acs_raw %>% mutate(geoid = as.numeric(geoid)) ,
+  by_sp = "GEOID",
+  by_df = "geoid",
+  how = "inner"
+) %>% filter(pop>150)
+
+map_m = tigris::geo_join(
+  shore_shp %>% filter(BoroCode == 1)
+  ,
+  acs_raw %>% mutate(geoid = as.numeric(geoid)) ,
+  by_sp = "GEOID",
+  by_df = "geoid",
+  how = "inner"
+) %>% filter(pop>150)
+
+map_bx = tigris::geo_join(
+  shore_shp %>% filter(BoroCode == 2)
+  ,
+  acs_raw %>% mutate(geoid = as.numeric(geoid)) ,
+  by_sp = "GEOID",
+  by_df = "geoid",
+  how = "inner"
+) %>% filter(pop>150)
+
+map_br = tigris::geo_join(
+  shore_shp %>% filter(BoroCode == 3)
+  ,
+  acs_raw %>% mutate(geoid = as.numeric(geoid)) ,
+  by_sp = "GEOID",
+  by_df = "geoid",
+  how = "inner"
+) %>% filter(pop>150)
+
+map_q = tigris::geo_join(
+  shore_shp %>% filter(BoroCode == 4)
+  ,
+  acs_raw %>% mutate(geoid = as.numeric(geoid)) ,
+  by_sp = "GEOID",
+  by_df = "geoid",
+  how = "inner"
+) %>% filter(pop>150)
+
+map_si = tigris::geo_join(
+  shore_shp %>% filter(BoroCode == 5)
+  ,
+  acs_raw %>% mutate(geoid = as.numeric(geoid)) ,
+  by_sp = "GEOID",
+  by_df = "geoid",
+  how = "inner"
+) %>% filter(pop>150)
+
+#dir.create("map_sf", showWarnings = FALSE)
+
+# maps <- list(
+#   manhattan      = map_m,
+#   brooklyn       = map_br,
+#   bronx          = map_bx,
+#   queens         = map_q,
+#   staten_island  = map_si,
+#   all_boroughs   = map_c
+# )
+
+#qs::qsave(maps, "maps.qs")
+#dir.create("graphs", showWarnings = FALSE)
+
+# created all of the inla graphs
+# for (map_name in names(maps)) {
+#   map <- maps[[map_name]]
+#   for (i in seq_len(nrow(weight_specs))) {
+#     ws <- weight_specs[i, ]
+# 
+#     # build neighbors exactly as in simulate_one()
+#     nb <- get_adj(
+#       map            = map,
+#       style          = ws$style,
+#       order          = ws$order,
+#       dist_threshold = ws$dist_threshold
+#     )
+# 
+#     # write out the INLA graph file
+#     fname <- paste0(map_name, "_", ws$style,"_",ws$order,"_",ws$dist_threshold, ".graph")
+#     
+#     nb2INLA(nb = nb$nb_use,file = paste("./graphs/",fname))
+#   }
+# }
+
+
+map = qs::qread("./qs_data/map_sf/map_m.qs")
+
+
+ qs::qread("./qs_data/map_sf/map_m.qs") %>%
+  mutate(b.1 = get_b(map      = .,
+                   style    = "queen",
+                   order    = 1,
+                   dist_threshold = NULL,
+                   tau      = 1.5,
+                   rho      = 0.1)) %>%
+  ggplot() +
+  geom_sf(aes(fill = b.1)) +
+  scale_fill_viridis_c(na.value = "grey90",
+                       limits   = c(-1, 1),
+                       oob      = squish)+
+  
+  qs::qread("./qs_data/map_sf/map_m.qs") %>%
+  mutate(b.5 = get_b(map      = .,
+                   style    = "queen",
+                   order    = 1,
+                   dist_threshold = NULL,
+                   tau      = 1.5,
+                   rho      = 0.5)) %>%
+  ggplot() +
+  geom_sf(aes(fill = b.5)) +
+  scale_fill_viridis_c(na.value = "grey90",
+                        limits   = c(-1, 1),
+                       oob      = squish)+
+  
+  qs::qread("./qs_data/map_sf/map_m.qs") %>%
+  mutate(b.9 = get_b(map      = .,
+                   style    = "queen",
+                   order    = 1,
+                   dist_threshold = NULL,
+                   tau      = 1.5,
+                   rho      = 0.9)) %>%
+  ggplot() +
+  geom_sf(aes(fill = b.9)) +
+  scale_fill_viridis_c(na.value = "grey90",
+                        limits   = c(-1, 1),
+                       oob      = squish)
+```
+
+
+## Test Single
+
+```{r}
+ map = qs::qread("./qs_data/map_sf/map_m.qs") %>%
+  mutate(b.1 = get_b(map      = .,
+                   style    = "queen",
+                   order    = 1,
+                   dist_threshold = NULL,
+                   tau      = 0.5,
+                   rho      = 0.1),
+         lambda.1 = exp(1+b.1),
+         y.1 = rpois(300,lambda.1),
+         b.5 = get_b(map      = .,
+                   style    = "queen",
+                   order    = 1,
+                   dist_threshold = NULL,
+                   tau      = 0.5,
+                   rho      = 0.3),
+         lambda.5 = exp(1+b.5),
+         y.5 = rpois(300,lambda.5),
+         b.9 = get_b(map      = .,
+                   style    = "queen",
+                   order    = 1,
+                   dist_threshold = NULL,
+                   tau      = 0.5,
+                   rho      = 0.6),
+         lambda.9 = exp(1+b.9),
+         y.9 = rpois(300,lambda.9),
+         idx = row_number()) 
+ 
+ 
+nb2INLA(nb = get_adj(map,style = "queen", order = 1, dist_threshold = NULL)$nb_use,file ="./g.graph")
+
+
+  graph <- inla.read.graph("./g.graph")
+
+ res1 <- inla(
+      y.1 ~ 1 +
+    f(idx,
+      model       = "bym2",
+      graph       = graph,
+      scale.model = TRUE,
+    hyper = list(
+        prec = list(prior = "pc.prec", param = c(1, 0.1)),     # P(σ > 1) = 0.01
+        phi  = list(prior = "pc",      param = c(0.5, 0.1))     # P(φ < 0.5) = 2/3
+      )
+    ),
+      family            = "poisson",
+      data              = map %>% sf::st_drop_geometry(),
+      control.predictor = list(compute = TRUE, link = 1),
+      control.compute   = list(dic = TRUE, cpo = TRUE,config = T)
+    )
+ 
+  res2 <- inla(
+      y.5 ~ 1 +
+    f(idx,
+      model       = "bym2",
+      graph       = graph,
+      scale.model = TRUE,
+      hyper = list(
+        prec = list(prior = "pc.prec", param = c(1, 0.1)),     # P(σ > 1) = 0.01
+        phi  = list(prior = "pc",      param = c(0.5, 0.1))     # P(φ < 0.5) = 2/3
+      )
+    ),
+      family            = "poisson",
+      data              = map %>% sf::st_drop_geometry(),
+      control.predictor = list(compute = TRUE),
+      control.compute   = list(dic = TRUE, cpo = TRUE,config = T)
+    )
+  
+   res3 <- inla(
+      y.9 ~ 1 +
+    f(idx,
+      model       = "bym2",
+      graph       = graph,
+      scale.model = TRUE,
+       hyper = list(
+        prec = list(prior = "pc.prec", param = c(1, 0.1)),     # P(σ > 1) = 0.01
+        phi  = list(prior = "pc",      param = c(0.5, 0.1))     # P(φ < 0.5) = 2/3
+      )
+    ),
+      family            = "poisson",
+      data              = map %>% sf::st_drop_geometry(),
+      control.predictor = list(compute = TRUE),
+      control.compute   = list(dic = TRUE, cpo = TRUE,config = T)
+    )
+   
+   res1 %>% 
+     summary()
+   
+   pred = inla.posterior.sample(result = res1,n = 200 )
+ lam.rep <- vector("list", 200)
+ rho.rep <- numeric(200)
+ tau.rep <- numeric(200)
+ y.rep <- numeric(200)
+ 
+ for(m in seq_len(200)) {
+   h    <- pred[[m]]$hyperpar
+   ##    - INLA stores log(τ) under something with "Prec" in the name,
+   ##      and logit(φ) under something with "Phi" in the name
+   lp   <-   h[ grep("prec", names(h), ignore.case=TRUE)[1] ]
+   lphi <-   h[ grep("phi",  names(h), ignore.case=TRUE)[1] ]
+   
+   ## back‐transform
+   tau.rep[m] <- exp(lp)       # τ = exp(log(τ))
+   rho.rep[m] <- plogis(lphi)  # φ = logistic(logit(φ))
+   
+   samp   <- pred[[m]]$latent
+   ηm     <- samp[grep("^Predictor", rownames(samp))]
+   λm     <- exp(ηm)
+   lam.rep[[m]] <- λm# posterior‐draw of the Poisson means
+  # y.rep[[m]] <- rpois(length(λm), λm)
+ }
+ 
+ wide.pred <- bind_cols(
+   dat,
+   do.call(cbind,lam.rep)
+ )
+
+   
+   res2 %>% 
+     
+     summary()
+   
+   res3 %>% 
+     summary()
+   
+   map %>% 
+     mutate(bm.1=res1$summary.random$idx$`0.5quant`[1:300],
+            bm.5=res2$summary.random$idx$`0.5quant`[1:300],
+            bm.9=res3$summary.random$idx$`0.5quant`[1:300]) %>% 
+   ggplot() +
+  geom_sf(aes(fill = b.1)) +
+  scale_fill_viridis_c(na.value = "grey90"#,
+                       # limits   = c(-3, 3),
+                      # oob      = squish
+                       )+
+      map %>% 
+     mutate(bm.1=res1$summary.random$idx$`0.5quant`[1:300],
+            bm.5=res2$summary.random$idx$`0.5quant`[1:300],
+            bm.9=res3$summary.random$idx$`0.5quant`[1:300]) %>% 
+   ggplot() +
+  geom_sf(aes(fill = bm.1)) +
+  scale_fill_viridis_c(na.value = "grey90"#,
+                       # limits   = c(-3, 3),
+                      # oob      = squish
+                       )
+   
+   
+   map %>% 
+     mutate(bm.1=res1$summary.random$idx$`0.5quant`[1:300],
+            bm.5=res2$summary.random$idx$`0.5quant`[1:300],
+            bm.9=res3$summary.random$idx$`0.5quant`[1:300]) %>% 
+   ggplot() +
+  geom_sf(aes(fill = b.5)) +
+  scale_fill_viridis_c(na.value = "grey90"#,
+                       # limits   = c(-3, 3),
+                      # oob      = squish
+                       )+
+      map %>% 
+     mutate(bm.1=res1$summary.random$idx$`0.5quant`[1:300],
+            bm.5=res2$summary.random$idx$`0.5quant`[1:300],
+            bm.9=res3$summary.random$idx$`0.5quant`[1:300]) %>% 
+   ggplot() +
+  geom_sf(aes(fill = bm.5)) +
+  scale_fill_viridis_c(na.value = "grey90"#,
+                       # limits   = c(-3, 3),
+                      # oob      = squish
+                       )
+   
+   
+   map %>% 
+     mutate(bm.1=res1$summary.random$idx$`0.5quant`[1:300],
+            bm.5=res2$summary.random$idx$`0.5quant`[1:300],
+            bm.9=res3$summary.random$idx$`0.5quant`[1:300]) %>% 
+   ggplot() +
+  geom_sf(aes(fill = b.9)) +
+  scale_fill_viridis_c(na.value = "grey90"#,
+                       # limits   = c(-3, 3),
+                      # oob      = squish
+                       )+
+      map %>% 
+     mutate(bm.1=res1$summary.random$idx$`0.5quant`[1:300],
+            bm.5=res2$summary.random$idx$`0.5quant`[1:300],
+            bm.9=res3$summary.random$idx$`0.5quant`[1:300]) %>% 
+   ggplot() +
+  geom_sf(aes(fill = bm.9)) +
+  scale_fill_viridis_c(na.value = "grey90"#,
+                       # limits   = c(-3, 3),
+                      # oob      = squish
+                       )
+   
+   cor(map %>% pull(b.9), res3$summary.random$idx$`0.5quant`[1:300], use = "complete.obs")
+   
+   
+   map %>% 
+     mutate(bm.1=res1$summary.random$idx$`0.5quant`[1:300],
+            yp.1 = res1$summary.fitted.values[["mean"]]
+            ) %>% 
+   ggplot() +
+  geom_sf(aes(fill = y.1)) +
+  scale_fill_viridis_c(na.value = "grey90"#,
+                       # limits   = c(-3, 3),
+                      # oob      = squish
+                       )+
+     map %>% 
+     mutate(bm.1=res1$summary.random$idx$`0.5quant`[1:300],
+            yp.1 = res1$summary.fitted.values[["mean"]]
+            ) %>% 
+   ggplot() +
+  geom_sf(aes(fill = yp.1)) +
+  scale_fill_viridis_c(na.value = "grey90"#,
+                       # limits   = c(-3, 3),
+                      # oob      = squish
+                       )
+  map %>% 
+     mutate(bm.1=res1$summary.random$idx$`0.5quant`[1:300],
+            yp.1 = res1$summary.fitted.values[["mean"]]
+            ) %>% 
+    ggplot()+
+    geom_point(aes(x = y.1, y = yp.1))+
+    geom_abline(slope = 1)
+  
+  map %>% 
+     mutate(bm.1=res1$summary.random$idx$`0.5quant`[1:300],
+            yp.1 = res1$summary.fitted.values[["mean"]]
+            ) %>% 
+    ggplot()+
+    geom_point(aes(x = b.1, y = bm.1))+
+    geom_abline(slope = 1)
+  
+   map %>% 
+     mutate(p_rate =res1$summary.random$idx$`0.5quant`[1:300] + res1$summary.fixed[["mean"]],
+            obs_rate = log(lambda.1),
+            ) %>% 
+    ggplot()+
+    geom_point(aes(x = obs_rate, y = p_rate))+
+    geom_abline(slope = 1)
+   
+  map %>% 
+     mutate(p_rate =res1$summary.random$idx$`0.5quant`[1:300] + res1$summary.fixed[["mean"]],
+            obs_rate = log(lambda.1),
+            ) %>% 
+    sf::st_drop_geometry() %>% 
+    summarize(bias = mean(abs(p_rate - obs_rate), na.rm = T),
+              mse = mean((p_rate - obs_rate)^2, na.rm = T))
+```
+
+### map specs
+
+```{r}
+
+weight_specs <- expand.grid(
+  style          = c("queen", "distance"),
+  order          = c(1, 2, 3, NA),
+  dist_threshold = c(NA, 0.5, 1.0),
+  stringsAsFactors = FALSE
+) %>% 
+# keep only (queen & order ∈ {1,2,3}) or (distance & dist_threshold ∈ {0.5,1})
+subset(
+  (style == "queen"    & !is.na(order)          &  is.na(dist_threshold)) |
+  (style == "distance" &  is.na(order)          & !is.na(dist_threshold))
+)
+
+# 3) Define your five neighbour and spatial parameter specs
+ne_configs <- expand.grid(
+  style          = c("queen", "distance"),
+  order          = c(1, 2, 3, NA),
+  dist_threshold = c(NA, 0.5, 1.0),
+  rho = c(0.1,0.5,0.9),
+  tau = c(0.5, 1.5),
+  stringsAsFactors = FALSE
+) %>%  subset(
+  (style == "queen"    & !is.na(order)          &  is.na(dist_threshold)) |
+  (style == "distance" &  is.na(order)          & !is.na(dist_threshold))
+)
+
+ne_labels <- expand.grid(
+  map_name =  c("manhattan","brooklyn", "bronx", "queens", "staten_island", "all_boroughs"),
+  style          = c("queen", "distance"),
+  order          = c(1, 2, 3, NA),
+  dist_threshold = c(NA, 0.5, 1.0),
+  rho = c(0.1,0.5,0.9),
+  tau = c(0.5, 1.5),
+  stringsAsFactors = FALSE
+) %>%  subset(
+  (style == "queen"    & !is.na(order)          &  is.na(dist_threshold)) |
+  (style == "distance" &  is.na(order)          & !is.na(dist_threshold))
+) %>% 
+  mutate(map_file_name = 
+         case_when( map_name == "manhattan" ~ "map_m",
+                    map_name == "brooklyn" ~"map_br",
+                    map_name == "bronx" ~"map_bx",
+                    map_name == "queens" ~"map_q",
+                    map_name == "staten_island" ~"map_si",
+                    map_name == "all_boroughs" ~"map_c"
+                    ),
+         spec_name_long = case_when(
+           
+           style == "queen" ~ str_c(
+                      map_name,
+                      style,
+                      order,
+                     paste0("NA"),
+                      sep = "_"
+    ),
+    style == "distance" ~ str_c(
+                      map_name,
+                      style,
+                      paste0("NA"),
+                      dist_threshold,
+                     
+                      sep = "_"
+    )),
+    nb_chunk = case_when(
+      style == "queen"    ~ str_c("q", order),
+      style == "distance" ~ str_c("d", dist_threshold, "mi")
+    ),
+    # now paste only the non‐NA bits
+    spec_name = case_when(
+      style == "queen"    ~ str_c(map_name,
+                                  nb_chunk,
+                                  str_c("r", rho),
+                                  str_c("t", tau),
+                                  map_file_name,
+                                  sep = "_"),
+      style == "distance" ~ str_c(map_name,
+                                  nb_chunk,
+                                  str_c("r", rho),
+                                  str_c("t", tau),
+                                  map_file_name,
+                                  sep = "_")
+    )
+  
+         )
+
+# gathering adjacency matrices
+
+adjacency_list <- list()
+
+for (i in seq_len(nrow(ne_configs))) {
+  cfg <- ne_configs[i, ]
+  for (map_name in c(ne_labels %>% select(map_file_name) %>% unique() %>% pull(map_file_name))) {
+    res <- get_adj(
+      map            = qs::qread(paste0("./map_sf/",map_name,".qs")),
+      style          = cfg$style,
+      order          = cfg$order,
+      dist_threshold = cfg$dist_threshold
+    )
+    # build a unique key
+    spec_key <- paste0(
+      map_name, "_",
+      cfg$style, if (!is.na(cfg$order)) paste0("_o", cfg$order),
+      if (!is.na(cfg$dist_threshold)) paste0("_d", cfg$dist_threshold, "mi")
+    )
+    # store the full W and/or the zero‐island‐removed W_small
+    adjacency_list[[spec_key]] <- list(
+      W       = res$W,
+      W_small = res$W_small
+    )
+  }
+}
+
+#qs::qsave(adjacency_list, "./qs_data/adjacency_list.qs")
+
+# walk(
+#   names(adjacency_list),
+#   function(spec){
+#     adj <- adjacency_list[[paste0(spec)]]
+#     qs::qsave(adj,paste0("./qs_data/qs_adj/",spec,".qs"))
+#   }
+# )
+
+
+
+
+  
+```
+
+### cholesky
+
+```{r}
+
+ 
+walk(ne_labels$spec_name, function(specs) {
+  ps = parse_spec(specs)
+  
+   if(ps$style == "queen"){
+     adj = qs::qread(
+    paste0("./qs_data/qs_adj/",
+           ps$map_file_name,
+           "_",
+           ps$style,
+           "_",
+           "o",
+           ps$order,".qs"
+           ))}
+  else{
+   adj =  qs::qread(
+      paste0("./qs_data/qs_adj/",
+             ps$map_file_name,
+             "_",
+             ps$style,
+             "_",
+             "d",
+             ps$dist_threshold,
+             "mi",
+             ".qs"))
+  }
+  
+  W_small <- adj$W_small
+  
+  # if you didn’t store rho/tau inside adj, parse them:
+  rho   <- ps$rho
+  tau   <- ps$tau
+
+  # 3) compute the chol factor
+  L <- compute_bym2_chol(W_small, rho, tau)
+  specs_name = paste0(ps$map_name,"_",ps$style,"_",ps$order,"_",ps$dist_threshold,"_", ps$rho,"_",ps$tau)
+  # 4) save it
+  qsave(L, paste0("./qs_data/qs_chol/",specs_name,".qs"))
+})
+
+
+# chol_list <- list()
+# 
+# for (mn in ne_labels$map_file_name) {
+#   for (cfg in ne_configs) {
+#     label <- if (cfg$style == "queen") {
+#       # queen: borough_q<order>_r<rho>_t<tau>
+#       sprintf("%s_q%d_r%.1f_t%.1f",
+#               mn, cfg$order, cfg$rho, cfg$tau)
+#     } else {
+#       # distance: borough_d<dist>mi_r<rho>_t<tau>
+#       sprintf("%s_d%.1fmi_r%.1f_t%.1f",
+#               mn, cfg$dist_threshold, cfg$rho, cfg$tau)
+#     }
+# 
+#     chol_list[[label]] <- get_cholesky_bym2(
+#       map            = qs::qread(paste("./maps_sf/",mn,".qs")),
+#       style          = cfg$style,
+#       order          = cfg$order,
+#       dist_threshold = cfg$dist_threshold,
+#       rho            = cfg$rho,
+#       tau            = cfg$tau
+#     )
+#   }
+# }
+
+
+#qs::qsave(chol_list, "chol_list.qs")    # all Cholesky matrices
+
+# then at start of each session
+
+chol_list <- qs::qread("./qs_data/chol_list.qs")
+
+get_sar_cholesky <- function(map,
+                             style = c("queen","distance"),
+                             order = 1,
+                             dist_threshold = NULL,
+                             tau = 1,
+                             rho = 0.5) {
+  # build nb based on style
+  if (style == "queen") {
+    nb1 <- poly2nb(map, queen = TRUE)
+    # for higher‐order contiguity use nblag
+    if (order > 1) {
+      nb_list <- nblag(nb1, maxlag = order)
+      nb_use  <- nblag_cumul(nb_list)
+    } else {
+      nb_use <- nb1
+    }
+  } else if (style == "distance") {
+    # need centroids and a numeric threshold in map's units
+    pts <- st_centroid(map)
+    coords <- st_coordinates(pts)
+    nb_use <- dnearneigh(coords, d1 = 0, d2 = dist_threshold, longlat = FALSE)
+  } else {
+    stop("style must be 'queen' or 'distance'")
+  }
+  W <- nb2mat(nb, style="B", zero.policy=TRUE) %>% as.matrix()
+  zero_i <- which(rowSums(W)==0)
+  W_small <- if(length(zero_i)>0) W[-zero_i,-zero_i] else W
+
+  # — build symmetric weight S = M^{-1/2} W M^{-1/2} —
+  M        <- diag(rowSums(W_small))
+  M_invsqrt<- diag(1 / sqrt(diag(M)))
+  S        <- M_invsqrt %*% W_small %*% M_invsqrt
+
+  # — SAR precision Q = τ (I – ρ S)(I – ρ S)ᵀ —
+  n <- nrow(S)
+  A <- diag(n) - rho * S
+  Q <- tau * (A %*% A)
+
+  # — Cholesky factor L where Q = L %*% t(L) —
+  U <- chol(Q)
+  L <- t(U)
+  return(L)
+}
+
+chol_list_s <- list()
+for (mn in names(maps)) {
+  for (cfg in ne_configs) {
+    label <- if (cfg$style == "queen") {
+      # queen: borough_q<order>_r<rho>_t<tau>
+      sprintf("%s_q%d_r%.1f_t%.1f",
+              mn, cfg$order, cfg$rho, cfg$tau)
+    } else {
+      # distance: borough_d<dist>mi_r<rho>_t<tau>
+      sprintf("%s_d%.1fmi_r%.1f_t%.1f",
+              mn, cfg$dist_threshold, cfg$rho, cfg$tau)
+    }
+
+    chol_list_s[[label]] <- get_sar_cholesky(
+      map            = maps[[mn]],
+      style          = cfg$style,
+      order          = cfg$order,
+      dist_threshold = cfg$dist_threshold,
+      rho            = cfg$rho,
+      tau            = cfg$tau
+    )
+  }
+}
+
+wide.pred %>%
+  mutate(eta_fit = res$summary.linear.predictor[["0.5quant"]] ) %>%
+  pivot_longer(
+    cols = `...3`:`...202`, 
+    names_to  = "draw", 
+    names_prefix = "lam_",
+    values_to = "lambda"
+  ) %>% 
+ # filter(idx  == 3) %>% 
+  ggplot(aes(x = y, group = draw)) +
+  geom_jitter(aes(y = lambda),alpha=0.3, col = "black") +
+  geom_point(aes(y = exp(eta_fit)),alpha=0.3, col = "red") +
+  labs(title="200 posterior Eta draws all Census Tracts",
+       x="observed" ,y = "sampled lambda (jitter) and fit lambda (red)")
+
+df.hyp <- data.frame(
+  rho = rho.rep,
+  tau = tau.rep
+)
+
+# ρ posterior
+ggplot(df.hyp, aes(x=rho)) +
+  geom_density(fill="grey80") +
+  geom_vline(xintercept=0.9, color="red") +
+  labs(x=expression(rho), y="density",
+       title="Posterior of ρ (true = 0.9)")+
+
+# τ posterior
+ggplot(df.hyp, aes(x=tau)) +
+  geom_density(fill="grey80") +
+  geom_vline(xintercept=0.5, color="red") +
+  labs(x=expression(tau), y="density",
+       title="Posterior of τ (true = 0.5)")
+  
+res %>% summary()
+```
+
+## Simulation 1000
+
+```{r}
+r_iter <- 10
+B_0    <- 1
+
+# -----------------------------------------------------------------------------
+#  Run over all 180 cholesky factors, then bind into one big data.frame
+# -----------------------------------------------------------------------------
+
+# 1) choose a plan
+options(future.globals.maxSize = 8 * 1024^3)
+plan(multisession, workers = parallel::detectCores() - 1)
+
+# 2) Parallelize over the *names* of your Cholesky list
+system.time({
+results_list <- future_lapply(
+  ne_labels$spec_name[61],
+  function(spec_name) {
+    # inside each worker, pull out the one R_t you need
+    simulate_one(spec_name)
+  },
+  future.seed = TRUE
+)
+})
+
+system.time({
+results_list_10 <- lapply(ne_labels$spec_name[1], function(spec_name) {
+  simulate_one(spec_name)
+})
+})
+
+system.time({
+results_list <- lapply(ne_labels$spec_name[1], function(spec_name) {
+  simulate_one(spec_name)
+})
+})
+
+system.time({
+results_list_61 <- lapply(ne_labels$spec_name[61], function(spec_name) {
+  simulate_one(spec_name)
+})
+})
+
+system.time({
+results_list_31 <- lapply(ne_labels$spec_name[31], function(spec_name) {
+  simulate_one(spec_name)
+})
+})
+
+system.time({
+results_list_1_pc <- lapply(ne_labels$spec_name[1], function(spec_name) {
+  simulate_pc(spec_name)
+})
+})
+
+system.time({
+results_list_31_pc <- lapply(ne_labels$spec_name[31], function(spec_name) {
+  simulate_pc(spec_name)
+})
+})
+
+
+system.time({
+results_list_61_pc <- lapply(ne_labels$spec_name[61], function(spec_name) {
+  simulate_pc(spec_name)
+})
+})
+
+# 3) bind everything into one big data.frame
+
+all_results_10<- bind_rows(results_list_10)%>% 
+  left_join(ne_labels %>% 
+              rename("map_spec" = "spec_name"),
+            by = "map_spec")
+all_results <- bind_rows(results_list)%>% 
+  left_join(ne_labels %>% 
+              rename("map_spec" = "spec_name"),
+            by = "map_spec")
+
+all_results_61 <- bind_rows(results_list_61)%>% 
+  left_join(ne_labels %>% 
+              rename("map_spec" = "spec_name"),
+            by = "map_spec")
+
+all_results_31 <- bind_rows(results_list_31)%>% 
+  left_join(ne_labels %>% 
+              rename("map_spec" = "spec_name"),
+            by = "map_spec")
+
+all_results_1_pc <- bind_rows(results_list_1_pc)%>% 
+  left_join(ne_labels %>% 
+              rename("map_spec" = "spec_name"),
+            by = "map_spec")
+
+all_results_31_pc <- bind_rows(results_list_31_pc)%>% 
+  left_join(ne_labels %>% 
+              rename("map_spec" = "spec_name"),
+            by = "map_spec")
+
+all_results_61_pc <- bind_rows(results_list_61_pc)%>% 
+  left_join(ne_labels %>% 
+              rename("map_spec" = "spec_name"),
+            by = "map_spec")
+
+all_results  %>% 
+  select(tau_median, tau_q975, tau_q025, rho_median, rho_q975, rho_q025,rho, tau) %>% 
+  unique() %>% 
+  ggplot()+
+  geom_point(aes(y = tau_median, x = "tau"))+
+  geom_errorbar(aes(ymin = tau_q025, ymax = tau_q975, x = "tau"))+
+  geom_point(aes(y = tau, x = "tau"), col = "red")+
+   geom_point(aes(y = rho_median, x = "rho"))+
+  geom_errorbar(aes(ymin = rho_q025, ymax = rho_q975, x = "rho"))+
+  geom_point(aes(y = rho, x = "rho"), col = "red")
+
+all_results  %>% 
+  ggplot()+
+  geom_point(aes(x = lambda_median, y = lambda_hat_median),fill = "red")+
+  labs(
+    y = "Predicted",
+    x = "Observed"
+  )
+
+
+
+
+all_results_61  %>% 
+  select(tau_median, tau_q975, tau_q025, rho_median, rho_q975, rho_q025,rho, tau) %>% 
+  unique() %>% 
+  ggplot()+
+   geom_point(aes(y = rho_median, x = "rho"))+
+  geom_errorbar(aes(ymin = rho_q025, ymax = rho_q975, x = "rho"))+
+  geom_point(aes(y = rho, x = "rho"), col = "red")
+
+all_results_61  %>% 
+  select(tau_median, tau_q975, tau_q025, rho_median, rho_q975, rho_q025,rho, tau) %>% 
+  unique() %>% 
+  ggplot()+
+  geom_point(aes(y = tau_median, x = "tau"))+
+  geom_errorbar(aes(ymin = tau_q025, ymax = tau_q975, x = "tau"))+
+  geom_point(aes(y = tau, x = "tau"), col = "red")
+
+all_results_61  %>% 
+  ggplot()+
+  geom_point(aes(x = lambda_median, y = lambda_hat_median),fill = "red")+
+  labs(
+    y = "Predicted",
+    x = "Observed"
+  )
+
+all_results_61  %>% 
+  select( rho_mse,rho_bias, tau_mse, tau_bias) %>% 
+  unique() 
+
+all_results_61_pc  %>% 
+  select(tau_median, tau_q975, tau_q025, rho_median, rho_q975, rho_q025,rho, tau) %>% 
+  unique() %>% 
+  ggplot()+
+   geom_point(aes(y = rho_median, x = "rho"))+
+  geom_errorbar(aes(ymin = rho_q025, ymax = rho_q975, x = "rho"))+
+  geom_point(aes(y = rho, x = "rho"), col = "red")
+
+all_results_61_pc  %>% 
+  select(tau_median, tau_q975, tau_q025, rho_median, rho_q975, rho_q025,rho, tau) %>% 
+  unique() %>% 
+  ggplot()+
+  geom_point(aes(y = tau_median, x = "tau"))+
+  geom_errorbar(aes(ymin = tau_q025, ymax = tau_q975, x = "tau"))+
+  geom_point(aes(y = tau, x = "tau"), col = "red")
+
+
+all_results_1_pc  %>% 
+  select(tau_median, tau_q975, tau_q025, rho_median, rho_q975, rho_q025,rho, tau) %>% 
+  unique() %>% 
+  ggplot()+
+   geom_point(aes(y = rho_median, x = "rho"))+
+  geom_errorbar(aes(ymin = rho_q025, ymax = rho_q975, x = "rho"))+
+  geom_point(aes(y = rho, x = "rho"), col = "red")
+
+all_results_1_pc  %>% 
+  select(tau_median, tau_q975, tau_q025, rho_median, rho_q975, rho_q025,rho, tau) %>% 
+  unique() %>% 
+  ggplot()+
+  geom_point(aes(y = tau_median, x = "tau"))+
+  geom_errorbar(aes(ymin = tau_q025, ymax = tau_q975, x = "tau"))+
+  geom_point(aes(y = tau, x = "tau"), col = "red")
+
+all_results_31_pc  %>% 
+  select(tau_median, tau_q975, tau_q025, rho_median, rho_q975, rho_q025,rho, tau) %>% 
+  unique() %>% 
+  ggplot()+
+   geom_point(aes(y = rho_median, x = "rho"))+
+  geom_errorbar(aes(ymin = rho_q025, ymax = rho_q975, x = "rho"))+
+  geom_point(aes(y = rho, x = "rho"), col = "red")
+
+all_results_31_pc  %>% 
+  select(tau_median, tau_q975, tau_q025, rho_median, rho_q975, rho_q025,rho, tau) %>% 
+  unique() %>% 
+  ggplot()+
+  geom_point(aes(y = tau_median, x = "tau"))+
+  geom_errorbar(aes(ymin = tau_q025, ymax = tau_q975, x = "tau"))+
+  geom_point(aes(y = tau, x = "tau"), col = "red")
+
+all_results_61_pc  %>% 
+  select(tau_median, tau_q975, tau_q025, rho_median, rho_q975, rho_q025,rho, tau) %>% 
+  unique() %>% 
+  ggplot()+
+   geom_point(aes(y = rho_median, x = "rho"))+
+  geom_errorbar(aes(ymin = rho_q025, ymax = rho_q975, x = "rho"))+
+  geom_point(aes(y = rho, x = "rho"), col = "red")
+
+all_results_61_pc  %>% 
+  select(tau_median, tau_q975, tau_q025, rho_median, rho_q975, rho_q025,rho, tau) %>% 
+  unique() %>% 
+  ggplot()+
+  geom_point(aes(y = tau_median, x = "tau"))+
+  geom_errorbar(aes(ymin = tau_q025, ymax = tau_q975, x = "tau"))+
+  geom_point(aes(y = tau, x = "tau"), col = "red")
+```
+
+## Simulation 1000
+
+```{r}
+r_iter <- 1000
+B_0    <- 1
+
+# helper to parse the name into its components
+parse_spec <- function(spec_name) {
+  # 1) map_name = everything up to the _q or _d chunk
+  map_name <- str_remove(spec_name, "_(?:q\\d|d[0-9.]+mi)_.*$")
+  
+  # 2) the neighbor chunk
+  nb_chunk <- str_extract(spec_name, "(q\\d|d[0-9.]+mi)")
+  
+  if (str_starts(nb_chunk, "q")) {
+    style          <- "queen"
+    order          <- as.integer(str_remove(nb_chunk, "^q"))
+    dist_threshold <- NA_real_
+  } else {
+    style          <- "distance"
+    order          <- NA_integer_
+    # strip the leading "d" and trailing "mi"
+    dist_threshold <- as.numeric(
+      str_remove(str_remove(nb_chunk, "^d"), "mi$")
+    )
+  }
+  
+  # 3) rho and tau
+  rho <- as.numeric(str_remove(str_extract(spec_name, "r[0-9.]+"), "^r"))
+  tau <- as.numeric(str_remove(str_extract(spec_name, "t[0-9.]+$"), "^t"))
+  
+  list(
+    map_name       = map_name,
+    style          = style,
+    order          = order,
+    dist_threshold = dist_threshold,
+    rho            = rho,
+    tau            = tau
+  )
+}
+# simulation + summarization for a single R_t
+simulate_one <- function(spec_name, R_t) {
+  ps  <- parse_spec(spec_name)
+  map <- maps[[ ps$map_name ]]
+  pop_full <- map %>% st_drop_geometry() %>% pull(pop)
+  n_map    <- length(pop_full)
+  
+  # rebuild nb & keep
+  if (ps$style == "queen") {
+    nb0 <- poly2nb(map, queen = TRUE)
+    nb  <- if (ps$order > 1) nblag(nb0, ps$order)[[ps$order]] else nb0
+  } else {
+    cent <- st_coordinates(st_centroid(map))
+    maxd <- ps$dist_threshold * 1609.34
+    nb   <- dnearneigh(cent, 0, maxd, longlat = FALSE)
+  }
+  W    <- nb2mat(nb, style = "B", zero.policy = TRUE) %>% as.matrix()
+  keep <- which(rowSums(W) != 0)
+  n_s  <- length(keep)
+  pop_s <- pop_full[keep]
+  
+  # prepare storage
+  b_store      <- matrix(NA, nrow = n_map, ncol = r_iter)
+  lambda_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+  y_store      <- matrix(NA, nrow = n_map, ncol = r_iter)
+  
+  # simulate
+  for (i in seq_len(r_iter)) {
+    # draw from the Gaussian with precision Q = L Lᵀ, where L = R_t
+    rn <- rnorm(2*n_s)
+    c_vec <- forwardsolve(R_t, rn)         # solves L · c_vec = rn
+    b   <- c_vec[1:n_s]
+    
+    # linear predictor + Poisson
+    z  <-   B_0 + b # log(pop_s/1000)
+    lambda <- exp(z)
+    y      <- rpois(n_s, lambda)
+    
+    # expand to full map
+    b_full      <- rep(NA, n_map);      b_full[keep]      <- b
+    lambda_full <- rep(NA, n_map); lambda_full[keep] <- lambda
+    y_full      <- rep(NA, n_map);      y_full[keep]      <- y
+    
+    b_store[,i]      <- b_full
+    lambda_store[,i] <- lambda_full
+    y_store[,i]      <- y_full
+  }
+  
+  # summarization helper
+  summarize_mat <- function(mat, prefix) {
+    tibble(
+      median = apply(mat, 1, median,    na.rm = TRUE),
+      q025   = apply(mat, 1, quantile, probs = 0.025, na.rm = TRUE),
+      q975   = apply(mat, 1, quantile, probs = 0.975, na.rm = TRUE)
+    ) %>%
+    rename_with(~ paste0(prefix, "_", .), everything())
+  }
+  
+  b_sum      <- summarize_mat(b_store,      "b")
+  lambda_sum <- summarize_mat(lambda_store, "lambda")
+  y_sum      <- summarize_mat(y_store,      "y")
+  
+  # bind together, add identifiers
+  tibble(
+    map_spec = spec_name,
+    area_id  = seq_len(n_map)
+  ) %>%
+  bind_cols(b_sum, lambda_sum, y_sum)
+}
+
+# -----------------------------------------------------------------------------
+#  Run over all 180 cholesky factors, then bind into one big data.frame
+# -----------------------------------------------------------------------------
+
+
+# 1) choose a plan 
+options(future.globals.maxSize = 8 * 1024^3) 
+plan(multisession, workers = parallel::detectCores() - 1)
+
+# 2) Parallelize over the *names* of your Cholesky list
+results_list <- future_lapply(
+  names(chol_list),
+  function(spec_name) {
+    # inside each worker, pull out the one R_t you need
+    R_t <- chol_list[[spec_name]]
+    simulate_one(spec_name, R_t)
+  },
+  future.seed = TRUE
+)
+
+# 3) bind everything into one big data.frame
+
+scenario_lookup <- tibble(
+  rho = c(0.2, 0.2, 0.5, 0.5, 0.9, 0.9),
+  tau = c(1.5, 0.5, 1.5, 0.5, 1.5, 0.5),
+  scenario_id = 1:6
+)
+
+all_results <- bind_rows(results_list)%>% 
+  extract(
+    map_spec,
+    into = c("map",      "neighbor",  "rho",    "tau"),
+    regex = "^(.+?)_(q\\d|d[0-9.]+mi)_(r[0-9.]+)_(t[0-9.]+)$"
+  ) %>%
+  mutate(
+    # turn "r0.2" -> 0.2, "t1.5" -> 1.5
+    rho = parse_number(rho),
+    tau = parse_number(tau),
+    # split neighbor into order vs distance
+    order      = if_else(str_starts(neighbor, "q"), parse_number(neighbor), NA_real_),
+    dist_miles = if_else(str_starts(neighbor, "d"), parse_number(neighbor), NA_real_)
+  ) %>% left_join(scenario_lookup, by = c("rho", "tau"))
+
+
+all_results  %>% 
+ # filter( grepl("staten", map)) %>% 
+  ggplot()+
+  geom_boxplot(aes(y =lambda_median,x = factor(scenario_id), fill = neighbor ))+
+  facet_wrap(~map)+
+  labs(x = "Scenario",
+       y = "Median Lambda Est.")
+
+all_results  %>% 
+  ggplot(
+    aes(x     = neighbor,
+    y     = lambda_median,
+    col = factor(scenario_id)))+
+  geom_point(
+    position = position_dodge(width = 0.5),
+    size     = 2
+  ) +
+  geom_errorbar(
+    aes(ymin = lambda_q025, ymax = lambda_q975),
+    width    = 0.2,
+    position = position_dodge(width = 0.5)
+  ) +
+  facet_wrap(~map) +
+  labs(
+    x     = "Neighbor Spec",
+    y     = "Median λ Estimate",
+    color = "Scenario ID"
+  ) +
+  theme_minimal()
+```
+
+# Test code Below
+
+```{r}
+
+ 
+
+r_iter = 1000
+
+b_c_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+y_c_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+lambda_c_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+
+system.time({
+set.seed(1234)
+for (i in 1:r_iter) {
+  # Generate one joint sample from the block precision matrix via INLA::qsample
+  c_mchol <- sapply(1, function(x) forwardsolve(l = R_t,x = rnorm((2*n)),k = (2*n)))
+  # Partition the result:
+  b_c = c_mchol[1:n]
+  
+   # Create the linear predictor and simulate count outcome y.
+  log_eta_c <- log(pop/1000) + B_0 + b_c         # linear predictor; here intercept = 1
+  lambda_c <- exp(log_eta_c)   # mean parameter for the Poisson
+  y_c <- rpois(length(lambda_c), lambda_c)
+  
+  # Map these simulation results to full map
+  b_ci <- match_map(b_c)
+  lambda_ci <- match_map(lambda_c)
+  y_ci <- match_map(y_c)
+  
+  # Store the results (they will be NA for areas without neighbors)
+  b_c_store[, i] <- b_ci
+  lambda_c_store[, i] <- lambda_ci
+  y_c_store[, i] <- y_ci
+  
+}
+})
+# =====================================================
+# CALCULATE SUMMARY STATISTICS: median, Q0.295, Q0.975
+# =====================================================
+# For each map area (each row), calculate the quantiles.
+compute_quantiles <- function(mat) {
+  # mat: each row is an area, columns are simulation iterations.
+  med <- apply(mat, 1, median, na.rm = TRUE)
+  q295 <- apply(mat, 1, quantile, probs = 0.295, na.rm = TRUE)
+  q975 <- apply(mat, 1, quantile, probs = 0.975, na.rm = TRUE)
+  return(data.frame(median = med, q295 = q295, q975 = q975))
+}
+
+# Compute summaries for b, lambda, and y
+# b_q_summary <- compute_quantiles(b_q_store)
+# lambda_q_summary <- compute_quantiles(lambda_q_store)
+# y_q_summary <- compute_quantiles(y_q_store)
+
+b_c_summary <- compute_quantiles(b_c_store)
+lambda_c_summary <- compute_quantiles(lambda_c_store)
+y_c_summary <- compute_quantiles(y_c_store)
+
+# Optionally, add prefixes to column names to avoid confusion
+# colnames(b_q_summary) <- paste0("b_q_", colnames(b_q_summary))
+# colnames(lambda_q_summary) <- paste0("lambda_q_", colnames(lambda_q_summary))
+# colnames(y_q_summary) <- paste0("y_q_", colnames(y_q_summary))
+
+colnames(b_c_summary) <- paste0("b_c_", colnames(b_c_summary))
+colnames(lambda_c_summary) <- paste0("lambda_c_", colnames(lambda_c_summary))
+colnames(y_c_summary) <- paste0("y_c_", colnames(y_c_summary))
+
+summary_data <- cbind(#b_q_summary, lambda_q_summary, y_q_summary,
+                      b_c_summary, lambda_c_summary, y_c_summary)
+new_map <- cbind(map, summary_data)
+```
+
+```{}
+
+system.time({
+  set.seed(1234)
+  gen_map2 <- map %>% mutate(
+    strong2 = gen_vec(., tau = 4, rho = 0.9),
+    weak1   = gen_vec(., tau = 4/9, rho = 0.1),
+    strong1 = gen_vec(., tau = 4/9, rho = 0.9),
+    weak2   = gen_vec(., tau = 4, rho = 0.1)
+  )
+})
+
+system.time({
+  set.seed(1234)
+  gen_map2 <- map %>% mutate(
+    strong2 = gen_count_data_inla(., tau = 1, rho = 0.9)
+  )
+})
+
+system.time({
+  set.seed(1234)
+  gen_map2 <- map %>% mutate(
+    weak2 = gen_count_data_inla(., tau = 1, rho = 0.05)
+  )
+})
+
+system.time({
+  set.seed(1234)
+  gen_map2.a <- map %>% mutate(
+    strong2 = gen_count_data_inla(., tau = 1, rho = 0.95)
+  )
+})
+
+set.seed(1234)
+
+gen_map = map %>% mutate(
+  strong1 = gen_vec(.,tau = 4/9, rho = 0.9),
+  weak1 = gen_vec(.,tau = 4/9, rho = 0.1),
+  strong2 = gen_vec(.,tau = 4, rho = 0.9),
+  weak2 = gen_vec(.,tau = 4, rho = 0.1))
+
+set.seed(1234)
+
+system.time({
+manhattan_sim = simulate_inla(map, tau = 4,rho = 0.9,beta_0 = 0,beta = 0,neighbor_type = "queen", neighbor_param = 1, n_sim = 10)
+})
+
+system.time({
+sim_complete_map = simulate_inla(map, tau = 4,rho = 0.9,beta_0 = 0,beta = 0,neighbor_type = "queen", neighbor_param = 1, n_sim = 10)
+})
+
+
+moran.test(x = gen_map %>% sf::st_drop_geometry() %>% pull(strong2), listw = )
+```
+
+
+```{r}
+
+
+
+system.time({
+  set.seed(1234)
+  gen_map2 <- map[30:200,] %>% mutate(
+    bym2_manual = gen_vec(., tau = 1, rho = 0.9),
+    bym2_reibler = gen_vec_inla(., tau = 1, rho = 0.9),
+    Inla_qsample = gen_count_data_inla(., tau = 1, rho = 0.9)
+    
+  
+  )
+})
+
+gen_map2 %>% 
+  unnest(bym2_manual) %>% 
+  ggplot()+
+  geom_sf(aes(fill = log(b)), size =0.01)+
+  scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_manual")+
+  theme_void()+
+  scale_fill_viridis_c()+
+  
+gen_map2 %>%
+  unnest(bym2_reibler) %>%
+  ggplot()+
+  geom_sf(aes(fill = log(b)), size =0.01)+
+  scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "Reibler")+
+  theme_void()+
+  scale_fill_viridis_c()+
+gen_map2 %>% 
+  unnest(Inla_qsample) %>% 
+  ggplot()+
+  geom_sf(aes(fill = log(b)), size =0.01)+
+  scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "qsample")+
+  theme_void()+
+  scale_fill_viridis_c()
+```
+
+
+
+```{r}
+
+
+
+gen_map %>% 
+  ggplot()+
+  geom_sf(aes(fill=log(strong1)), size =0.01)+
+  #scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  theme_void()#+
+  
+  gen_map %>% 
+  ggplot()+
+  geom_sf(aes(fill = weak1), size =0.01)+
+  scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  theme_void()+
+
+gen_map %>% 
+  ggplot()+
+  geom_sf(aes(fill = strong2), size =0.01)+
+  scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  theme_void()+
+  
+gen_map %>% 
+  ggplot()+
+  geom_sf(aes(fill = weak2), size =0.01)+
+  scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  theme_void()
+  
+ sim_complete_map %>% 
+   filter(sim == 1) %>% 
+   ggplot()+
+   geom_histogram(aes(x = lambda))
+
+```
+
+
+
+```{r}
+gen_map2 %>% 
+  unnest(strong2) %>% 
+  ggplot()+
+  geom_sf(aes(fill = log(lambda)), size =0.01)+
+  #scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  theme_void()
+
+gen_map2 %>% 
+  unnest(weak2) %>% 
+  ggplot()+
+  geom_sf(aes(fill = log(w_1)), size =0.01)+
+  #scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  theme_void()+
+  scale_fill_viridis_c()+
+  gen_map2.a %>% 
+  unnest(strong2) %>% 
+  ggplot()+
+  geom_sf(aes(fill = log(w_1)), size =0.01)+
+  #scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  theme_void()+
+  scale_fill_viridis_c()
+  
+  nb <- poly2nb(gen_map2, queen = TRUE)
+nb2INLA("adjacency.graph", nb)
+g <- inla.read.graph(filename = "adjacency.graph")
+gen_map2$idx <- 1:nrow(gen_map2)  # spatial index
+
+formula <- y ~ 1 + 
+  f(idx, model = "bym2", graph = g,
+    scale.model = TRUE,
+    hyper = list(
+      prec = list(prior = "pc.prec", param = c(1, 0.01)),
+      phi = list(prior = "pc", param = c(0.5, 0.5))
+    )
+  )
+
+result <- inla(
+  formula,
+  family = "poisson",
+  data = as.data.frame(gen_map2 %>% unnest(strong2)),
+  control.predictor = list(compute = TRUE),
+  control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE)
+)
+
+summary(result)
+
+# Fixed effect (intercept)
+result$summary.fixed
+
+# Spatial random effects
+spatial_effects <- result$summary.random$idx
+head(spatial_effects)
+
+gen_map2$mean_phi <- spatial_effects$mean[1:2222]
+hyper_summary <- result$summary.hyperpar
+rho_est <- hyper_summary["Phi for idx", "mean"]
+cat("Estimated rho (mixing parameter):", rho_est, "\n")
+ggplot(gen_map2) +
+  geom_sf(aes(fill = mean_phi)) +
+  scale_fill_viridis_c() +
+  labs(title = "Estimated Spatial Effect (BYM2)") +
+  theme_minimal()
+
+residuals <- gen_map2 %>% unnest(strong2) %>% pull(y) - result$summary.fitted.values$mean
+valid_idx <- which(!is.na(residuals))
+
+# Subset your spatial data to valid units
+valid_map <- gen_map2 %>% unnest(strong2) %>% mutate(row  = row_number()) %>% filter(row %in% valid_idx)
+  nb_valid <- poly2nb(valid_map, queen = TRUE)
+lw_valid <- nb2listw(nb_valid, style = "W", zero.policy = T)
+moran_result_mod <- moran.test(residuals[valid_idx], lw_valid, zero.policy = T)
+
+```
+
+
+## Inverting matrices
+
+
+```{r}
+
+
+# create neighbor network
+   nb <- spdep::poly2nb(map, queen = T )
+
+# convert neighbor network to matrix
+  W = as.matrix(spdep::nb2mat(nb, style = "B",zero.policy = T))
+
+# removing neighbors with 0 adjacency since they can not contribute and cause W to be a singular matrix
+  
+  ids = tibble(zero = nb == "0") %>% mutate( id = row_number())
+  neighbors = ids %>% filter(zero == F) %>% pull(id)
+  no_neighbors = ids %>% filter(zero == T) %>% pull(id)
+  W_small = W[-no_neighbors,-no_neighbors]
+
+
+ 
+  M = diag(rowSums(W_small))
+
+  M_vec = diag(M)
+  M_in = diag(1/(sqrt(M_vec)))
+  matrix_check = M_in %*% W_small %*% M_in
+  eigens = eigen(matrix_check,only.values = T,symmetric = F)$values
+  min_eigen = min(eigens)
+  max_eigen = max(eigens)
+
+  if (rho >= 1/min_eigen & rho <= 1/max_eigen ){
+
+    Q_u =  (M - 0.8*W_small)
+  }else{
+    message( paste0("rho should be between ", min_eigen," and ",max_eigen))
+    message( paste0("rho pushed to min = ", min_eigen))
+
+    Q_u =  (M - min_eigen*W_small)
+  }
+
+  # using row-echolon form to find the inverse of a matrix
+#matlib::inv(Q) # not all matrixes have an inverse but all have a generalized inverse "Harville - Linear Models and the .. 2028"
+
+tau = 4/9
+rho = 0.8
+# create neighbor network
+   nb <- spdep::poly2nb(map, queen = T )
+# convert neighbor network to matrix
+  W = as.matrix(spdep::nb2mat(nb, style = "B",zero.policy = T))
+
+# removing neighbors with 0 adjacency since they can not contribute and cause W to be a singular matrix
+  
+  ids = tibble(zero = nb == "0") %>% mutate( id = row_number())
+  neighbors = ids %>% filter(zero == F) %>% pull(id)
+  no_neighbors = ids %>% filter(zero == T) %>% pull(id)
+  W_small = W[-no_neighbors,-no_neighbors]
+
+
+ 
+  M = diag(rowSums(W_small))
+ Q_u =  (M - rho*W_small)
+ Q_u_scaled = tau*Q_u
+# Q for b
+ n <- nrow(W_small)
+ I_n <- diag(n)
+ I_2n <- diag(2*n)
+
+  # Here, tau_b is the precision (or a hyperparameter for the unstructured part)
+  Q11 <- (tau / (1 - rho)) * I_n
+  # For Sigma22, note: if you already have Q as tau*(M - rho * W_small), you may adjust it by adding (rho/(1-rho))*I.
+  Q22 <- Q_u_scaled + (rho/(1 - rho)) * I_n
+  Q12 <- (-sqrt(tau * rho) / (1 - rho)) * I_n
+
+  # Construct the full block covariance matrix.
+  Q_b_scaled <- rbind(
+    cbind(Q11, Q12),
+    cbind(Q12, Q22)
+  )
+
+  Q_b_inv <- matrix(NA, 2*n, 2*n)
+
+for (i in 1:(2*n)) {
+  # Solve Q * x = e_i, where e_i is the i'th column of the identity matrix.
+  Q_b_inv[, i] <- INLA::inla.qsolve(Q = Q_b_scaled, B = I_2n[, i, drop = FALSE])
+}
+
+#C_1 = matlib::Ginv(tau*Q+diag(x = 0.001,ncol = ncol(Q), nrow = nrow(Q)))
+
+ 
+n_Q <- nrow(Q_u_scaled)
+I_n_u <- diag(n_Q)
+Q_u_inv <- matrix(NA, n_Q, n_Q)
+
+
+for (i in 1:n_Q) {
+  # Solve Q * x = e_i, where e_i is the i'th column of the identity matrix.
+  Q_u_inv[, i] <- INLA::inla.qsolve(Q = Q_u_scaled, B = I_n_u[, i, drop = FALSE])
+}
+
+```
+
+## test
+
+```{r}
+### inverted matrices manually versus q sampler
+system.time({
+c_q = sapply(1:100, function(x) INLA::inla.qsample(Q = Q_b_scaled)) 
+})
+
+# system.time({
+#   R_t = t(chol(Q_b_scaled))
+# })
+
+system.time({
+
+
+c_mchol <- sapply(1:100, function(x) forwardsolve(l = R_t,x = rnorm((2*n)),k = (2*n)))
+
+})
+
+comparison <- all.equal(cov(t(c_q)), cov(t(c_mchol)), tolerance = 0.1)
+
+c_manual = mvtnorm::rmvnorm(n=1, mean = c(rep(0,(2*length(neighbors)))),
+                    sigma = Q_b_inv)
+
+## qsampler
+  b_q = c_q[1:n]
+  u_q = c_q[(n+1):(2*n)]
+## q solve manual
+  b_m = c_manual[1:n]
+  u_m = c_manual[(n+1):(2*n)]
+  
+## cholesky
+  b_c = c_mchol[1:n]
+  u_c = c_mcho[(n+1):(2*n)]
+  
+## Match back to map size
+  match_map = function(val){
+    val = val %>% tibble() %>% 
+      rename("value" = ".") %>%
+    mutate(id = as.numeric(neighbors)) %>%
+    right_join(ids %>%
+                 mutate(id = as.numeric(id)), by = "id") %>%
+    arrange(id) %>% 
+      pull(value)
+  }
+  
+## qsampler
+  b_qi = match_map(b_q)
+  u_qi = match_map(u_q)
+## q solve manual
+  b_mi = match_map(b_m)
+  u_mi = match_map(u_m)
+  
+## cholesky factorization
+  b_ci = match_map(b_c)
+  u_ci = match_map(u_c)
+
+## End results
+  log_eta_q = 1 + b_qi
+  log_eta_c = 1 + b_ci
+  log_eta_m = 1 + b_mi
+
+  lambda_q = exp(log_eta_q)
+  lambda_c = exp(log_eta_c)
+  lambda_m = exp(log_eta_m)
+
+  y_q = rpois(length(lambda_q),lambda_q)
+  y_c = rpois(length(lambda_q),lambda_c)
+  y_m = rpois(length(lambda_m),lambda_m)
+
+  test_data = tibble(y_q = y_q,y_c = y_c, y_m = y_m, lambda_q = lambda_q, lambda_m = lambda_m, b_q = b_qi, b_c = b_ci,b_m = b_mi)
+
+
+
+```
+
+
+```{r}
+new_map = cbind(map,test_data)
+
+new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = log(b_q)), size =0.01)+
+  scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_q_sample")+
+  theme_void()+
+  scale_fill_viridis_c()+
+  
+new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = log(b_m)), size =0.01)+
+  scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_manual")+
+  theme_void()+
+  scale_fill_viridis_c()+
+  new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = log(b_c)), size =0.01)+
+  scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_c_sample")+
+  theme_void()+
+  scale_fill_viridis_c()
+```
+
+```{r}
+
+new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = y_q), size =0.01)+
+  scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_q_sample")+
+  theme_void()+
+  scale_fill_viridis_c()+
+  
+new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = y_m), size =0.01)+
+  scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_manual")+
+  theme_void()+
+  scale_fill_viridis_c()+
+  new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = y_c), size =0.01)+
+  scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_c_sample")+
+  theme_void()+
+  scale_fill_viridis_c()
+```
+
+## iteration 
+
+```{r}
+
+
+# create neighbor network
+   nb <- spdep::poly2nb(map, queen = T )
+# convert neighbor network to matrix
+  W = as.matrix(spdep::nb2mat(nb, style = "B",zero.policy = T))
+
+# removing neighbors with 0 adjacency since they can not contribute and cause W to be a singular matrix
+  
+  ids = tibble(zero = nb == "0") %>% mutate( id = row_number())
+  neighbors = ids %>% filter(zero == F) %>% pull(id)
+  no_neighbors = ids %>% filter(zero == T) %>% pull(id)
+  W_small = W[-no_neighbors,-no_neighbors]
+
+
+ 
+  M = diag(rowSums(W_small))
+  
+ n <- nrow(W_small)
+ I_n <- diag(n)
+ I_2n <- diag(2*n)
+tau = 9
+rho = 0.8
+
+ Q_u =  (M - rho*W_small)
+ Q_u_scaled = tau*Q_u
+  # Here, tau_b is the precision (or a hyperparameter for the unstructured part)
+  Q11 <- (tau / (1 - rho)) * I_n
+  # For Sigma22, note: if you already have Q as tau*(M - rho * W_small), you may adjust it by adding (rho/(1-rho))*I.
+  Q22 <- Q_u_scaled + (rho/(1 - rho)) * I_n
+  Q12 <- (-sqrt(tau * rho) / (1 - rho)) * I_n
+
+  # Construct the full block covariance matrix.
+  Q_b_scaled <- rbind(
+    cbind(Q11, Q12),
+    cbind(Q12, Q22)
+  )
+n_map <- nrow(W)  # total number of areas in map
+# Initialize matrices to store the simulations across iterations;
+# Rows correspond to map indices, columns correspond to iterations.
+pop = (map %>% sf::st_drop_geometry() %>% pull(pop))[neighbors]
+B_0 = 1
+R_t = t(chol(Q_b_scaled))
+
+
+
+ match_map = function(val){
+    val = val %>% tibble() %>% 
+      rename("value" = ".") %>%
+    mutate(id = as.numeric(neighbors)) %>%
+    right_join(ids %>%
+                 mutate(id = as.numeric(id)), by = "id") %>%
+    arrange(id) %>% 
+      pull(value)
+  }
+  
+
+r_iter = 1000
+
+#b_q_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+#y_q_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+#lambda_q_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+
+b_c_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+y_c_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+lambda_c_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+
+system.time({
+set.seed(1234)
+for (i in 1:r_iter) {
+  # Generate one joint sample from the block precision matrix via INLA::qsample
+
+#c_q = sapply(1, function(x) INLA::inla.qsample(Q = Q_b_scaled))
+
+c_mchol <- sapply(1, function(x) forwardsolve(l = R_t,x = rnorm((2*n)),k = (2*n)))
+
+  # Partition the result:
+  # (By your design, the first half corresponds to b (the combined effect) 
+  # and the second half to u (the structured component).)
+  # b_q <- c_q[1:n]
+  # # u_q <- c_q[(n+1):(2*n)]  # (if you need u separately)
+  # 
+  # # Create the linear predictor and simulate count outcome y.
+  # log_eta_q <-  log(pop/1000) + B_0 + b_q         # linear predictor; here intercept = 1
+  # lambda_q <- exp(log_eta_q)   # mean parameter for the Poisson
+  # y_q <- rpois(length(lambda_q), lambda_q)
+  # 
+  # # Map these simulation results to full map
+  # b_qi <- match_map(b_q)
+  # lambda_qi <- match_map(lambda_q)
+  # y_qi <- match_map(y_q)
+  # 
+  # # Store the results (they will be NA for areas without neighbors)
+  # b_q_store[, i] <- b_qi
+  # lambda_q_store[, i] <- lambda_qi
+  # y_q_store[, i] <- y_qi
+  # 
+  ### generate using cholesky decomposition
+  
+  #R_t = t(chol(Q_b_scaled))
+  c_mchol = forwardsolve(l = R_t,x = rnorm((2*n)),k = (2*n))
+ # c_mchol <- sapply(1, function(x) forwardsolve(t(A), rnorm(5)))
+  b_c = c_mchol[1:n]
+  
+   # Create the linear predictor and simulate count outcome y.
+  log_eta_c <- log(pop/1000) + B_0 + b_c         # linear predictor; here intercept = 1
+  lambda_c <- exp(log_eta_c)   # mean parameter for the Poisson
+  y_c <- rpois(length(lambda_c), lambda_c)
+  
+  # Map these simulation results to full map
+  b_ci <- match_map(b_c)
+  lambda_ci <- match_map(lambda_c)
+  y_ci <- match_map(y_c)
+  
+  # Store the results (they will be NA for areas without neighbors)
+  b_c_store[, i] <- b_ci
+  lambda_c_store[, i] <- lambda_ci
+  y_c_store[, i] <- y_ci
+  
+}
+})
+# =====================================================
+# CALCULATE SUMMARY STATISTICS: median, Q0.295, Q0.975
+# =====================================================
+# For each map area (each row), calculate the quantiles.
+compute_quantiles <- function(mat) {
+  # mat: each row is an area, columns are simulation iterations.
+  med <- apply(mat, 1, median, na.rm = TRUE)
+  q295 <- apply(mat, 1, quantile, probs = 0.295, na.rm = TRUE)
+  q975 <- apply(mat, 1, quantile, probs = 0.975, na.rm = TRUE)
+  return(data.frame(median = med, q295 = q295, q975 = q975))
+}
+
+# Compute summaries for b, lambda, and y
+# b_q_summary <- compute_quantiles(b_q_store)
+# lambda_q_summary <- compute_quantiles(lambda_q_store)
+# y_q_summary <- compute_quantiles(y_q_store)
+
+b_c_summary <- compute_quantiles(b_c_store)
+lambda_c_summary <- compute_quantiles(lambda_c_store)
+y_c_summary <- compute_quantiles(y_c_store)
+
+# Optionally, add prefixes to column names to avoid confusion
+# colnames(b_q_summary) <- paste0("b_q_", colnames(b_q_summary))
+# colnames(lambda_q_summary) <- paste0("lambda_q_", colnames(lambda_q_summary))
+# colnames(y_q_summary) <- paste0("y_q_", colnames(y_q_summary))
+
+colnames(b_c_summary) <- paste0("b_c_", colnames(b_c_summary))
+colnames(lambda_c_summary) <- paste0("lambda_c_", colnames(lambda_c_summary))
+colnames(y_c_summary) <- paste0("y_c_", colnames(y_c_summary))
+
+summary_data <- cbind(#b_q_summary, lambda_q_summary, y_q_summary,
+                      b_c_summary, lambda_c_summary, y_c_summary)
+new_map <- cbind(map, summary_data)
+```
+
+```{r}
+
+new_map %>% 
+  sf::st_drop_geometry() %>% 
+  select(GEOID, b_q_median, lambda_q_median, b_c_median lambda_c_median, y_c_median, y_q_median) %>% 
+  pivot_longer(
+    b_q_median:y_q_median,
+    names_to = "vars",
+    values_to = "estimates"
+  ) %>% 
+  mutate(variable = case_when(
+    grepl("b_",vars) ~"spatial_re",
+    grepl("lambda_", vars)~"rate",
+    grepl("y_",vars)~"count"
+  ),
+  type = case_when(
+    grepl("q_median", vars)~"qsampler",
+    grepl("c_median", vars)~"cholesky"
+  ) %>% factor()) %>% 
+  ggplot()+
+  geom_boxplot(aes(y =estimates, x = type, fill = variable ))
+```
+
+```{r}
+
+summary_data %>% 
+  mutate(id = row_number()) %>% 
+
+ggplot(aes(x = id))+
+  geom_line(aes(y =  b_c_median), col = "blue")+
+  geom_line(aes(y =  b_c_q295), col = "red")+
+  geom_line(aes(y =  b_c_q975), col = "red")+
+  labs(y = "random effect",x = "census tract")+
+  theme_minimal()+
+  
+  summary_data %>% 
+  mutate(id = row_number()) %>% 
+  sample_n(10) %>% 
+  ggplot(aes(x = id))+
+  geom_line(aes(y =  lambda_c_median), col = "blue",alpha = 0.3)+
+  geom_line(aes(y =  lambda_c_q295), col = "red",alpha = 0.3)+
+  geom_line(aes(y =  lambda_c_q975), col = "red",alpha = 0.3)+
+  labs(y = "Population (1000) adjusted lambda",x = "census tract")+
+  theme_minimal()
+```
+
+
+```{r}
+
+new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = y_q_median), size =0.01)+
+ # scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_q_sample")+
+  theme_void()+
+  scale_fill_viridis_c()+
+  
+  new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = y_c_median), size =0.01)+
+ # scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_c_sample")+
+  theme_void()+
+  scale_fill_viridis_c()
+
+new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = lambda_q_median), size =0.01)+
+  #scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_q_sample")+
+  theme_void()+
+  scale_fill_viridis_c()+
+  
+  new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = lambda_c_median), size =0.01)+
+ # scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_c_sample")+
+  theme_void()+
+  scale_fill_viridis_c()
+
+new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = b_q_median), size =0.01)+
+  #scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_q_sample")+
+  theme_void()+
+  scale_fill_viridis_c()+
+  
+  new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = b_c_median), size =0.01)+
+ # scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_c_sample")+
+  theme_void()+
+  scale_fill_viridis_c()
+
+
+new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = y_c_median), size =0.01)+
+ # scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_c_sample")+
+  theme_void()+
+  scale_fill_viridis_c()+
+  new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = lambda_c_median), size =0.01)+
+ # scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_c_sample")+
+  theme_void()+
+  scale_fill_viridis_c()+
+   new_map %>%
+  ggplot()+
+  geom_sf(aes(fill = b_c_median), size =0.01)+
+ # scale_fill_continuous(limits = c(-40, 40), oob = scales::squish) +
+  labs(title = "bym2_c_sample")+
+  theme_void()+
+  scale_fill_viridis_c()
+
+```
+
+```{r}
+r_iter = 100
+n_map <- nrow(W)  # total number of areas in map
+# Initialize matrices to store the simulations across iterations;
+# Rows correspond to map indices, columns correspond to iterations.
+pop = (map %>% sf::st_drop_geometry() %>% pull(pop))[neighbors]
+
+b_q_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+y_q_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+lambda_q_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+
+b_c_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+y_c_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+lambda_c_store <- matrix(NA, nrow = n_map, ncol = r_iter)
+
+system.time({
+set.seed(1234)
+for (i in 1:r_iter) {
+  # Generate one joint sample from the block precision matrix via INLA::qsample
+  c_q <- INLA::inla.qsample(Q = Q_b_scaled)
+  # Partition the result:
+  # (By your design, the first half corresponds to b (the combined effect) 
+  # and the second half to u (the structured component).)
+  b_q <- c_q[1:n]
+  # u_q <- c_q[(n+1):(2*n)]  # (if you need u separately)
+  
+  # Create the linear predictor and simulate count outcome y.
+  log_eta_q <-  1 + b_q         # linear predictor; here intercept = 1
+  lambda_q <- exp(log_eta_q)   # mean parameter for the Poisson
+  y_q <- rpois(length(lambda_q), lambda_q)
+  
+  # Map these simulation results to full map
+  b_qi <- match_map(b_q)
+  lambda_qi <- match_map(lambda_q)
+  y_qi <- match_map(y_q)
+  
+  # Store the results (they will be NA for areas without neighbors)
+  b_q_store[, i] <- b_qi
+  lambda_q_store[, i] <- lambda_qi
+  y_q_store[, i] <- y_qi
+  
+  ### generate using cholesky decomposition
+  
+  R_t = t(chol(Q_b_scaled))
+  c_mchol = forwardsolve(l = R_t,x = rnorm((2*n)),k = (2*n))
+  b_c = c_mchol[1:n]
+  
+   # Create the linear predictor and simulate count outcome y.
+  log_eta_c <-   1 + b_c         # linear predictor; here intercept = 1
+  lambda_c <- exp(log_eta_c)   # mean parameter for the Poisson
+  y_c <- rpois(length(lambda_c), lambda_c)
+  
+  # Map these simulation results to full map
+  b_ci <- match_map(b_c)
+  lambda_ci <- match_map(lambda_c)
+  y_ci <- match_map(y_c)
+  
+  # Store the results (they will be NA for areas without neighbors)
+  b_c_store[, i] <- b_ci
+  lambda_c_store[, i] <- lambda_ci
+  y_c_store[, i] <- y_ci
+  
+}
+})
+# =====================================================
+# CALCULATE SUMMARY STATISTICS: median, Q0.295, Q0.975
+# =====================================================
+# For each map area (each row), calculate the quantiles.
+compute_quantiles <- function(mat) {
+  # mat: each row is an area, columns are simulation iterations.
+  med <- apply(mat, 1, median, na.rm = TRUE)
+  q295 <- apply(mat, 1, quantile, probs = 0.295, na.rm = TRUE)
+  q975 <- apply(mat, 1, quantile, probs = 0.975, na.rm = TRUE)
+  return(data.frame(median = med, q295 = q295, q975 = q975))
+}
+
+# Compute summaries for b, lambda, and y
+b_q_summary <- compute_quantiles(b_q_store)
+lambda_q_summary <- compute_quantiles(lambda_q_store)
+y_q_summary <- compute_quantiles(y_q_store)
+
+b_c_summary <- compute_quantiles(b_c_store)
+lambda_c_summary <- compute_quantiles(lambda_c_store)
+y_c_summary <- compute_quantiles(y_c_store)
+
+# Optionally, add prefixes to column names to avoid confusion
+colnames(b_q_summary) <- paste0("b_q_", colnames(b_q_summary))
+colnames(lambda_q_summary) <- paste0("lambda_q_", colnames(lambda_q_summary))
+colnames(y_q_summary) <- paste0("y_q_", colnames(y_q_summary))
+
+colnames(b_c_summary) <- paste0("b_c_", colnames(b_c_summary))
+colnames(lambda_c_summary) <- paste0("lambda_c_", colnames(lambda_c_summary))
+colnames(y_c_summary) <- paste0("y_c_", colnames(y_c_summary))
+
+summary_data <- cbind(b_q_summary, lambda_q_summary, y_q_summary,
+                      b_c_summary, lambda_c_summary, y_c_summary)
+new_map <- cbind(map, summary_data)
+```
+
+# testing the cholesky algorithm
+
+```{r}
+
+mat = matrix(c(0,1,1,0,0,
+
+               1,0,1,1,1,
+
+               1,1,0,1,1,
+
+               0,1,1,0,0,
+
+               0,1,1,0,0),
+
+        nrow = 5, ncol = 5, byrow = TRUE)
+
+mat_m = diag(rowSums(mat))
+
+Q= (mat_m - 0.2*mat)
+Q_inv = solve(Q)
+A = chol((Q))
+
+x_mat_na <- sapply(1:1000000, function(x) forwardsolve(t(A), rnorm(5)))
+w_mat_na <- sapply(1:10000, function(x) INLA::inla.qsample(Q = Q))
+
+
+sample_cov = cov(t(x_mat_na))
+sample_cov_w = cov(t(w_mat_na))
+diff_norm <- sqrt(sum((sample_cov - Q_inv)^2))
+diff_norm_w <- sqrt(sum((sample_cov_w - Q_inv)^2))
+
+comparison <- all.equal(sample_cov, Q_inv, tolerance = 0.1)
+comparison <- all.equal(sample_cov_w, Q_inv, tolerance = 0.1)
+
+range(sample_cov)
+
+
+
+
+cor(x_mat_na,x_star_na) %>% rowMeans() %>% 
+  mean()
+
+q_mat_na = matrix(NA,5,5)
+  
+  for(j in 1:5){
+    q_mat_na[,j] = INLA::inla.qsample(Q = Q)
+  }
+
+q_cov = cov(q_mat_na)
+
+cov(x_cov, q_cov)
+
+
+x_mat_na = matrix(NA,5,5)
+  
+  for(j in 1:5){
+    z = rnorm(nrow(mat))
+    x_mat_na[,j] = forwardsolve(t(mat_A),z)
+  }
+  
+
+
+x_cov = cov(x_mat_na)
+```
+
+## Full Test
+
+```{r}
+map = qs::qread("./qs_data/map_sf/map_m.qs")
+style    = "queen"
+order    = 1
+dist_threshold = NULL
+tau      = 0.5
+rho      = 0.4
+
+adjacency_list = get_adj(map = map,
+                           style = style,
+                           order = order,
+                           dist_threshold = dist_threshold)
+
+  W_small = adjacency_list[["W_small"]]
+  n_s = nrow(W_small)
+  I_n = diag(n_s)
+  M = diag(rowSums(adjacency_list$W_small))
+  Q= (M - W_small)
+  Q_inv = MASS::ginv(Q)
+  D = diag(Q_inv)
+  log_D = log(D)
+  n_q = length(log_D)
+  sum_log_D = sum(log_D)
+  n_q_inv = 1/n_q
+  c = exp(mean(log_D))
+ # c = exp(n_q_inv * sum_log_D)
+  Q_star = Q*c
+  Q_star_inv = MASS::ginv(Q_star)
+g     <- igraph::graph_from_adjacency_matrix(W_small, mode="undirected")
+comps <- igraph::components(g)$membership
+to_drop <- tapply(seq_len(n_s), comps, `[`, 1)  # first index in each comp
+
+# 3. form the reduced precision
+Q_reduced <- Q[-to_drop, -to_drop]
+
+  L <- chol(Q_reduced) 
+  log_pdet <- 2 * sum(log(diag(L)))
+  n_q <- nrow(Q)
+  c <- exp(-log_pdet / n_q)
+  Q_star <- Q * (1/c)
+ # Q_star_red <- Q_star[-1, -1]
+  #L_star_red <- chol(Q_star_red)
+  # precision blocks
+  #Q_u_sc = scale_q(W_small = W_small)[["Q_s"]]
+constr <- list(A = matrix(1, nrow = 1, ncol = n_s), e = 1e-40)
+Q.scaled <- as(INLA::inla.scale.model(Q, constr = constr), "matrix")
+Qcov <- MASS::ginv(Q.scaled) 
+
+  Q11      <- (tau / (1 - rho)) * I_n
+  Q22      <- Q_star + (rho / (1 - rho)) * I_n
+  Q22      <- Q + (rho / (1 - rho)) * I_n
+  Q22      <- Q.scaled + (rho / (1 - rho)) * I_n
+  Q12      <- (-sqrt(tau * rho) / (1 - rho)) * I_n
+
+  Q_block  <- rbind(
+    cbind(Q11, Q12),
+    cbind(Q12, Q22)
+  )
+  Q_block_inv = MASS::ginv(Q_block)
+  R_t = t(chol(Q_block+diag(1e-6, (2*n_s))))
+
+  R_u = t(chol(Q_star))
+
+  # 3. simulate
+  rn       <- rnorm(2 * n_s)
+  ru       <- rnorm( n_s)
+  c_vec    <- forwardsolve(R_t, rn)     # solves L · c_vec = rn
+  u_vec    <- forwardsolve(R_u, ru) 
+  u_vec    <-  mvtnorm::rmvnorm(n = 1,mean = rep(0,(n_s)),sigma = Q_star_inv)
+  v = rnorm(n_s)
+  b_small  <- c_vec[1:n_s]
+  c_vec  <- mvtnorm::rmvnorm(n = 1,mean = rep(0,(2*n_s)),sigma = Q_block_inv)
+  b_small  <- c_vec[1:n_s] + c_vec[(n_s+1):(2*n_s)]
+  
+  
+  b_small  <- mvtnorm::rmvnorm(n = 1,mean = rep(0,(2*n_s)),sigma = Q_block_inv)[1:n_s]
+  b_small  <- (sqrt(1-rho) * v + sqrt(rho) * t(u_vec))/sqrt(tau)
+ lambda = exp(1+t(b_small))
+  y = rpois(length(lambda), lambda)
+  
+
+  dat = tibble(b = t(b_small), 
+               lambda = lambda, 
+               y = y) %>% 
+    mutate(idx = row_number()
+           )
+           
+  
+
+
+nb2INLA(nb = adjacency_list$nb_use,file ="./g.graph")
+
+
+  graph <- inla.read.graph("./g.graph")
+
+ res1 <- inla(
+      y ~ 
+    f(idx,
+      model       = "bym2",
+      graph       = graph,
+      scale.model = T,
+    hyper = list(
+        prec = list(prior = "pc.prec", param = c(1, 0.9)),    
+        phi  = list(prior = "pc",      param = c(0.5, 0.9))    
+      )
+    ),
+      family            = "poisson",
+      data              = dat,
+      control.predictor = list(compute = TRUE, link = 1),
+      control.compute   = list(dic = TRUE, cpo = TRUE,config = T)
+    )
+ 
+ res1 %>% 
+   summary()
+ 
+dat %>% 
+     mutate(p_rate =res1$summary.random$idx$`0.5quant`[1:length(dat$idx)] + res1$summary.fixed[["mean"]],
+            obs_rate = log(lambda),
+            ) %>% 
+    ggplot()+
+    geom_point(aes(x = obs_rate, y = p_rate))+
+    geom_abline(slope = 1)
+   
+  dat %>% 
+     mutate(p_rate =res1$summary.random$idx$`0.5quant`[1:length(dat$idx)] + res1$summary.fixed[["mean"]],
+            obs_rate = log(lambda),
+            ) %>% 
+    sf::st_drop_geometry() %>% 
+    summarize(bias = mean(abs(p_rate - obs_rate), na.rm = T),
+              mse = mean((p_rate - obs_rate)^2, na.rm = T))
+ 
+
+
+```
+
+## small INLA test
+
+```{r}
+tau      = 0.5
+rho      = 0.3
+
+
+mat = matrix(c(0,1,1,0,0,
+
+               1,0,1,1,1,
+
+               1,1,0,1,1,
+
+               0,1,1,0,0,
+
+               0,1,1,0,0),
+
+        nrow = 5, ncol = 5, byrow = TRUE)
+
+mat_m = diag(rowSums(mat))
+n = nrow(mat) 
+#Q= (mat_m - mat + diag(1e-6, n)  )
+Q= (mat_m - mat )
+# Q_reduced <- Q[-1, -1]
+# L <- chol(Q_reduced) 
+# log_pdet <- 2 * sum(log(diag(L)))
+# n_q <- nrow(Q)
+# c <- exp(-log_pdet / n_q)
+# Q_star <- Q * c
+# Q_star_red <- Q_star[-1, -1]
+# L_star_red <- chol(Q_star_red)
+# 
+# ε        <- 1e-6
+# Q_pd     <- Q_star + Diagonal(n, ε)
+# L_approx <- chol(Q_pd)  
+# #Q_inv = solve(Q)
+# A = chol((Q))
+# 
+# trQinv <- mean(replicate(200, {
+#     z <- rnorm(n)
+#     fs <- forwardsolve(t(A), z)
+#     bs <- backsolve(A, fs)
+#     sum(z*bs)
+#   }))
+#   c     =  trQinv /n
+
+  c = exp(mean(log(diag(MASS::ginv(Q)))))
+  
+Q_s =  Q*c
+Q_s_inv = matlib::Ginv(Q_s)
+
+I_n = diag(n)
+
+  Q11      <- (tau / (1 - rho)) * I_n
+  Q22      <- Q_s + (rho / (1 - rho)) * I_n
+  Q12      <- (-sqrt(tau * rho) / (1 - rho)) * I_n
+
+  Q_block  <- rbind(
+    cbind(Q11, Q12),
+    cbind(Q12, Q22)
+  )
+
+  R_t = t(chol(Q_block))
+  r_t = t(chol(Q_s))
+  
+  #rn       <- rnorm(2 * n)
+  #c_vec    <- forwardsolve(R_t, rn)   
+  #b  <- c_vec[1:n]
+  nsims = 100000
+  b_vec = sapply(1:nsims, function(x) forwardsolve(l = R_t,x = rnorm((2*n)),k = (2*n))[1:n]
+                 )
+  
+  #cov(b_vec)
+  
+ # constr_u <- list(A = matrix(1, nrow=1, ncol=n), e = 0)
+#u<- inla.qsample(
+#   n   = nsims,
+#   Q   = Q_s + Diagonal(n, 1e-8),  # jitter to make PD
+#   constr = constr_u
+# )
+  # u = mvtnorm::rmvnorm(n=nsims,mean = rep(0,n),sigma = solve(Q_s+ Diagonal(n, 1e-8)))
+  # 
+  #  u = sapply(1:nsims, function(x) forwardsolve(r_t, rnorm((n)))
+  #                )
+  # v =  t(mvtnorm::rmvnorm(n=nsims,mean = rep(0,n),sigma = I_n))
+  # 
+  ed    <- eigen(Q_s, symmetric=TRUE)
+pos   <- which(ed$values > 1e-8)     # drop near‐zero eigenvalues
+Λ     <- ed$values[pos]
+U     <- ed$vectors[,pos]
+
+# simulate u_* ~ N(0, Q_star^{-1}) precisely in the non‐null subspace
+Z     <- matrix(rnorm(length(pos)*nsims), length(pos), nsims)
+uC    <- U %*% (Z / sqrt(Λ))         # each column is one u_*
+vC    <- matrix(rnorm(n*nsims), n, nsims)
+  b2<-( sqrt(1-rho)*vC + sqrt(rho)*uC ) / sqrt(tau)
+ # b2<- ((sqrt(1-rho)*v) + (sqrt(rho)*u))*(1/sqrt(tau))
+  
+  
+  prec_b <- (tau * ((1-rho)*Diagonal(n) + rho * Q_s)) %>% as.matrix()
+  b3 <- t(mvtnorm::rmvnorm(n = nsims,mean =  rep(0,n), sigma = solve(prec_b)))
+  ############ checking b
+  
+  sample_cov_b = cov(t(b_vec))
+sample_cov_b2 = cov(t(b2))
+sample_cov_b3 = cov(t(b3))
+
+
+comparison1 <- all.equal(sample_cov_b , sample_cov_b2, tolerance = 0.1)
+comparison2 <- all.equal(sample_cov_b , sample_cov_b3, tolerance = 0.1)
+
+comparison3 <- all.equal(sample_cov_b2 , sample_cov_b3, tolerance = 0.1)
+comparison1 
+comparison2
+comparison3
+  
+################# process
+  lambda = exp(1+b)
+  y = rpois(length(lambda), lambda)
+  
+
+  dat = tibble(b = b, 
+               lambda = lambda, 
+               y = y) %>% 
+    mutate(idx = row_number()
+           )
+           
+  
+# Convert to a neighbours list of class "nb"
+nb_list <- vector("list", nrow(mat))
+for(i in seq_len(nrow(mat))) {
+  nb_list[[i]] <- which(mat[i,] == 1)
+}
+class(nb_list) <- "nb"
+
+# Write it in the INLA graph format
+nb2INLA(nb_list, file = "small.graph")
+
+# Read it back
+graph <- inla.read.graph("small.graph")
+
+ res1 <- inla(
+      y ~ 1 +
+    f(idx,
+      model       = "bym2",
+      graph       = graph,
+      scale.model = TRUE#,
+    # hyper = list(
+    #     prec = list(prior = "pc.prec", param = c(1, 0.01)),     # P(σ > 1) = 0.01
+    #     phi  = list(prior = "pc",      param = c(0.5, 0.1))     # P(φ > 0.5) = 2/3
+    #   )
+    ),
+      family            = "poisson",
+      data              = dat,
+      control.predictor = list(compute = TRUE, link = 1),
+      control.compute   = list(dic = TRUE, cpo = TRUE,config = T)
+    )
+ 
+ res1 %>% 
+   summary()
+ 
+ rho.rep <- numeric(200)
+ tau.rep <- numeric(200)
+
+  post = inla.posterior.sample(result = res1,n = 200 )
+  
+ for(m in seq_len(200)) {
+   h    <- post[[m]]$hyperpar
+   lp   <-   h[ grep("prec", names(h), ignore.case=TRUE)[1] ]
+   lphi <-   h[ grep("phi",  names(h), ignore.case=TRUE)[1] ]
+   
+   ## back‐transform
+   tau.rep[m] <- exp(lp)       # τ = exp(log(τ))
+   rho.rep[m] <- plogis(lphi)  # φ = logistic(logit(φ))
+
+ }
+ 
+median(tau.rep)
+median(rho.rep)
+ 
+```
+
+## STAN
+
+### inla 1
+
+```{r}
+
+# Map data and specifications
+map = qs::qread("./qs_data/map_sf/map_m.qs")
+style    = "queen"
+order    = 1
+dist_threshold = NULL
+tau      = 0.5
+rho      = 0.6
+# assign grap
+
+# working on adjacency matrix
+ adjacency_list = get_adj(map = map,
+                           style = style,
+                           order = order,
+                           dist_threshold = dist_threshold)
+ 
+ nb2INLA(nb = adjacency_list$nb_use,file ="./g.graph")
+ graph <- inla.read.graph("./g.graph")
+
+ 
+
+
+ 
+
+  W_small = adjacency_list[["W_small"]]
+  n_ws = nrow(W_small)
+  I_n = diag(n_ws)
+  M = diag(rowSums(adjacency_list$W_small))
+  Q = (M - W_small)
+  
+  # calculate scaling factor
+  Q_inv = MASS::ginv(Q)
+  D = diag(Q_inv)
+  log_D = log(D)
+  c = exp(mean(log_D))
+  # scale Q
+  Q_star = Q*c
+  Q_star_inv = MASS::ginv(Q_star)
+  # checking if scale Q is correct using INLA
+  constr <- list(A = matrix(1, nrow = 1, ncol = n_ws), e = 1e-40)
+  Q.scaled <- as(INLA::inla.scale.model(Q, constr = constr), "matrix")
+  all.equal(Q.scaled, Q_star, tolerance = 0.01)
+
+
+  # building block precision matrix
+  
+  Q11      <- (tau / (1 - rho)) * I_n
+  Q22      <- Q_star + (rho / (1 - rho)) * I_n
+  Q12      <- (-sqrt(tau * rho) / (1 - rho)) * I_n
+
+  Q_block  <- rbind(
+    cbind(Q11, Q12),
+    cbind(Q12, Q22)
+  )
+
+  Q_block_inv = MASS::ginv(Q_block)
+
+  #R_t = t(chol(Q_block[-1,-1]))
+  
+  ######## b1
+  R_t = t(chol(Q_block + Diagonal((2*n_ws),1e-8)))
+  rn       <- rnorm(2 * n_ws)
+  c_vec    <- forwardsolve(R_t, rn)     # solves L · c_vec = rn
+  b_small  <- c_vec[1:n_ws]
+  
+  # checking to make sure b is being sampled properly using 3 difference methods
+  
+  ######### b2
+  c_vec_n  <- mvtnorm::rmvnorm(n = 1,mean = rep(0,(2*n_ws)),sigma = Q_block_inv) %>% as.vector()
+  b_small_n  <- c_vec_n[1:n_ws]
+  
+  ######### b3
+  Prec_b  <- tau * ((1 -rho) * diag(n_ws) +rho * Q_star)
+  Sigma_b <- solve(Prec_b)
+  b1 <- as.numeric(mvtnorm::rmvnorm(1, sigma = Sigma_b))
+  
+  ########## b4
+  A_constr <- matrix(c(rep(0,n_ws), rep(1,n_ws)), nrow=1)
+ constr_block <- list(A = A_constr, e = 0)
+    w_draw <- inla.qsample(
+      
+       n    = 1,
+       Q    = Q_block + diag(1e-8,(2*n_ws)),
+       constr = constr_block
+    )[,1]
+    
+    b2 <- as.numeric(w_draw[1:n_ws])
+    
+    ######### b5
+    v = rnorm(n_ws)
+    u = rnorm(n_ws,0,MASS::ginv(Q_star))
+    b5 <- (sqrt(1-rho)*v + sqrt(rho)*u)/sqrt(tau)
+    
+    ######### b6
+    v = mvtnorm::rmvnorm(n = 500, mean = rep(0,n_ws),sigma = diag(1,n_ws))
+    u = mvtnorm::rmvnorm(n = 500, mean = rep(0,n_ws),sigma = MASS::ginv(Q_star))
+    
+    b6 <- (sqrt(1-rho)*v + sqrt(rho)*u)/sqrt(tau)
+    
+n_sims = 30
+morans_I  <- numeric(n_sims)
+morans_p  <- numeric(n_sims)
+
+lw <- nb2listw(
+  mat2listw(W_small, style="W")$neighbours,
+  style="W"
+)
+
+for(i in seq_len(n_sims)) {
+  test <- moran.test(b5[i,], listw=lw , zero.policy=TRUE)
+  morans_I[i] <- test$estimate["Moran I statistic"]
+  morans_p[i] <- test$p.value
+}
+
+# ---- 4. filter “significant” fields ----
+alpha <- 0.05
+keep  <- which(morans_p < alpha)
+message(length(keep), " fields passed Moran’s I p<", alpha)
+
+b_good <- b5[keep, , drop=FALSE]   # only the retained rows
+
+# ---- 5. quick sanity checks ----
+# 5a. marginal variance ≈ 1/tau
+cat("empirical Var(b) across *all* sims ≈", var(as.vector(b5)), 
+    "theoretical 1/tau  =", 1/tau, "\n")
+
+# 5b. proportion of variance from u vs. v
+v_var <- var(as.vector(sqrt(1-rho)/sqrt(tau) * v))
+u_var <- var(as.vector(sqrt(rho)   /sqrt(tau) * u))
+cat("structured fraction ≈", u_var/(u_var+v_var), " expected φ =", rho, "\n")
+  
+    # checks  
+     ks.test(b_small,b_small_n)
+   ks.test(b1,b_small_n)
+   ks.test(b_small,b1)
+   ks.test(b_small,b2)
+   ks.test(b_small_n,b2)
+   ks.test(b1,b2)
+   ks.test(b5,b_small) # the same as cholesky
+   
+   ks.test(t(b6[1,]),b1)
+   ks.test(t(b6[1,]),b2)
+   ks.test(t(b6[1,]),b_small)
+    ks.test(t(b6[1,]),b_small_n)
+  
+
+lambda = exp(1+b_small)
+ y = rpois(length(lambda), lambda)
+ 
+ lambda = exp(1+b5)
+ y = rpois(length(lambda), lambda)
+  
+  # compile dataset
+
+
+
+  dat = tibble(b =b_small,
+               lambda = lambda,
+               y = y) %>%
+    mutate(idx = row_number()
+           )
+
+  
+ 
+
+  # fit model
+ res1 <- inla(
+      y ~ 1+
+    f(idx,
+      model       = "bym2",
+      graph       = graph,
+      scale.model = T,
+    # hyper = list(
+    #     prec = list(prior = "pc.prec", param = c(1, 0.5)),
+    #     phi  = list(prior = "pc",      param = c(0.6, 0.1))
+    #   )
+    hyper = list(
+        prec = list(prior = "loggamma", param = c(0.01, 0.01)),
+        phi  = list(prior = "logitbeta",      param = c(2, 2))
+      )
+    ),
+      family            = "poisson",
+      data              = dat,
+      control.predictor = list(compute = TRUE, link = 1),
+      control.compute   = list(dic = TRUE, cpo = TRUE,config = T)
+    )
+ 
+post <- inla.posterior.sample(result = res1,n =  200)
+phi_samps <- plogis(sapply(post, function(x) x$hyperpar["Phi for idx"]))
+library(bayesplot)
+mcmc_areas(data.frame(phi=phi_samps)) +
+  geom_vline(xintercept=0.1, linetype="dashed")
+ 
+dat %>% 
+     mutate(p_rate =res1$summary.random$idx$`0.5quant`[1:length(dat$idx)] + res1$summary.fixed[["mean"]],
+            obs_rate = log(lambda),
+            ) %>% 
+    ggplot()+
+    geom_point(aes(x = obs_rate, y = p_rate))+
+    geom_abline(slope = 1)
+   
+  dat %>% 
+     mutate(p_rate =res1$summary.random$idx$`0.5quant`[1:length(dat$idx)] + res1$summary.fixed[["mean"]],
+            obs_rate = log(lambda),
+            ) %>% 
+    sf::st_drop_geometry() %>% 
+    summarize(bias = mean(abs(p_rate - obs_rate), na.rm = T),
+              mse = mean((p_rate - obs_rate)^2, na.rm = T))
+ 
+
+
+ rho.rep <- numeric(200)
+ tau.rep <- numeric(200)
+
+  post = inla.posterior.sample(result = res1,n = 200 )
+  
+ for(m in seq_len(200)) {
+   h    <- post[[m]]$hyperpar
+   lp   <-   h[ grep("prec", names(h), ignore.case=TRUE)[1] ]
+   lphi <-   h[ grep("phi",  names(h), ignore.case=TRUE)[1] ]
+   
+   ## back‐transform
+   tau.rep[m] <- exp(lp)       # τ = exp(log(τ))
+   rho.rep[m] <- plogis(lphi)  # φ = logistic(logit(φ))
+
+ }
+ 
+median(tau.rep)
+median(rho.rep)
+
+# checking if generated b and predicted b are similar
+
+ ks.test(dat$b, res1$summary.random$idx$`0.5quant`[1:n_ws])
+
+ median(dat$b, na.rm = T)
+  median(res1$summary.random$idx$`0.5quant`[1:n_ws])
+  
+   var(dat$b, na.rm = T)
+  var(res1$summary.random$idx$`0.5quant`[1:n_ws])
+  
+  post  <- inla.posterior.sample(res1, n = 500)
+b_samps <- sapply(post, function(x) x$latent[ paste0("idx:", 1:n_ws) ])
+
+lower <- apply(b_samps, 1, quantile, prob = 0.025, na.rm = T)
+upper <- apply(b_samps, 1, quantile, prob = 0.975, na.rm = T)
+true_b <- dat$b                             # your b_small
+
+ok <- is.finite(lower) & is.finite(upper)
+coverage <- mean( true_b[ok] >= lower[ok] & true_b[ok] <= upper[ok] )
+cat("Overall coverage of 95% CIs for b_i (on", sum(ok), "areas):", round(coverage,3), "\n")
+
+
+# 4. (Optional) A pooled KS‐test of all posterior draws vs. true values
+pooled_draws <- as.vector(b_samps)
+pooled_truth  <- rep(true_b, times = ncol(b_samps))
+ks.test(pooled_truth, pooled_draws)
+
+post_med <- res1$summary.random$idx$`0.5quant`[1:n_ws]
+truth    <- dat$b
+
+bias  <- mean(post_med - truth)
+mse   <- mean((post_med - truth)^2)
+corr  <- cor(post_med, truth)
+
+cat("Bias =", round(bias,3),  "  MSE =", round(mse,3),
+    "  Corr =", round(corr,3), "\n")
+
+ci   <- res1$summary.random$idx[, c("0.025quant","0.975quant")]
+true_b <- dat$b
+coverage <- mean(true_b >= ci[,"0.025quant"] &
+                      true_b <= ci[,"0.975quant"])
+ cat("Coverage of 95% CIs for b_i:", round(coverage,3), "\n")
+ 
+  map[-adjacency_list$zero_i,] %>%
+  mutate(true_b = dat$b,
+         est_b  = res1$summary.random$idx$`0.5quant`[1:n_ws],
+         err    = est_b - true_b) %>% 
+
+ggplot() +
+  geom_sf(aes(fill = err), color = NA) +
+  scale_fill_distiller(palette = "RdBu", direction = 1) +
+  labs(fill  = "Est – True",
+       title = "Spatial error in BYM2 posterior median") +
+  theme_minimal()
+```
+
+## b moran
+```{r}
+lw <- nb2listw(
+  mat2listw(W_small, style="W")$neighbours,
+  style="W"
+)
+set.seed(123)
+rhos <- c(0.2, 0.5, 0.8)
+B    <- 100   # number of replicates per rho
+
+results <- data.frame()
+
+for(r in rhos) {
+  sims <- t(replicate(B, simulate_moran_b(r,tau = 0.5, lw = lw)))
+  df   <- data.frame(
+    rho     = r,
+    moran_b = sims[,1] %>% unlist(),
+    moran_y = sims[,2]%>% unlist()
+  )
+  results <- bind_rows(results, df)
+}
+
+summary_tbl <- results %>%
+  group_by(rho) %>%
+  summarize(
+    mean_Ib = mean(moran_b),
+    sd_Ib   = sd(moran_b),
+    mean_Iy = mean(moran_y),
+    sd_Iy   = sd(moran_y)
+  )
+
+print(summary_tbl)
+
+results_a <- data.frame()
+
+for(r in rhos) {
+  sims <- t(replicate(B, simulate_moran_a(r,tau = 0.5, lw = lw)))
+  df   <- data.frame(
+    rho     = r,
+    moran_b = sims[,1] %>% unlist(),
+    moran_y = sims[,2]%>% unlist()
+  )
+  results_a <- bind_rows(results_a, df)
+}
+
+summary_tbl_a <- results_a %>%
+  group_by(rho) %>%
+  summarize(
+    mean_Ib = mean(moran_b),
+    sd_Ib   = sd(moran_b),
+    mean_Iy = mean(moran_y),
+    sd_Iy   = sd(moran_y)
+  )
+
+print(summary_tbl_a)
+
+
+results_block <- data.frame()
+
+for(r in rhos) {
+  sims <- t(replicate(B, simulate_moran(r,tau = 0.5, lw = lw)))
+  df   <- data.frame(
+    rho     = r,
+    moran_b = sims[,1] %>% unlist(),
+    moran_y = sims[,2]%>% unlist()
+  )
+  results_block <- bind_rows(results_block, df)
+}
+
+summary_tbl_block <- results_block %>%
+  group_by(rho) %>%
+  summarize(
+    mean_Ib = mean(moran_b),
+    sd_Ib   = sd(moran_b),
+    mean_Iy = mean(moran_y),
+    sd_Iy   = sd(moran_y)
+  )
+
+print(summary_tbl_block)
+
+```
+
+### Estimating tau and b
+
+```{r}
+P  <- solve(Sigma_hat)        # your estimated Precision
+n  <- nrow(P)
+T  <- sum(diag(P))            # = tr(P)
+U  <- sum(P * Q_star)         # = tr(P Q_*)
+V  <- sum(diag(Q_star))       # = tr(Q_*)
+W  <- sum(Q_star * Q_star) 
+```
+
+### inla sim
+
+```{r}
+
+# Map data and specifications
+map = qs::qread("./qs_data/map_sf/map_m.qs")
+style    = "queen"
+order    = 1
+dist_threshold = NULL
+tau      = 0.5
+rho     = 0.1
+# assign grap
+
+# working on adjacency matrix
+ adjacency_list = get_adj(map = map,
+                           style = style,
+                           order = order,
+                           dist_threshold = dist_threshold)
+ 
+ nb_big <- vector("list", n_ws * n_sim)
+ nb_small <- adjacency_list$nb_use
+for (r in 1:n_sim) {
+  offset <- (r-1)*n_ws
+  for (i in 1:n_ws) {
+    nb_big[[ offset + i ]] <- offset + nb_small[[i]]
+  }
+}
+
+# write/read the graph
+ nb_big <- lapply(nb_big, function(x) as.integer(x))
+class(nb_big) <- "nb"        # mark it as a neighbours list
+attr(nb_big, "region.id") <- rep(seq_len(n_ws), times = n_sim)
+nb2INLA(nb = nb_big, file = "big.graph")
+graph_big <- inla.read.graph("big.graph")
+
+ 
+
+
+ 
+
+  W_small = adjacency_list[["W_small"]]
+  n_ws = nrow(W_small)
+  I_n = diag(n_ws)
+  M = diag(rowSums(adjacency_list$W_small))
+  Q = (M - W_small)
+  
+  # calculate scaling factor
+  Q_inv = MASS::ginv(Q)
+  D = diag(Q_inv)
+  log_D = log(D)
+  c = exp(mean(log_D))
+  # scale Q
+  Q_star = Q*c
+  # checking if scale Q is correct using INLA
+  constr <- list(A = matrix(1, nrow = 1, ncol = n_ws), e = 1e-40)
+  Q.scaled <- as(INLA::inla.scale.model(Q, constr = constr), "matrix")
+  all.equal(Q.scaled, Q_star, tolerance = 0.01)
+
+   # building block precision matrix
+  Q11      <- (tau / (1 - rho)) * I_n
+  Q22      <- Q_star + (rho / (1 - rho)) * I_n
+  Q12      <- (-sqrt(tau * rho) / (1 - rho)) * I_n
+
+  Q_block  <- rbind(
+    cbind(Q11, Q12),
+    cbind(Q12, Q22)
+  )
+
+  R_t = t(chol(Q_block + Diagonal((2*n_ws),1e-8)))
+  rn       <- rnorm(2 * n_ws)
+  c_vec    <- forwardsolve(R_t, rn)     # solves L · c_vec = rn
+ set.seed(123)
+   b_small  <- c_vec[1:n_ws]
+
+
+big_data <- bind_rows(
+  lapply(1:n_sim, function(r) {
+    y_r <- rpois(n_ws, exp(1 + b_small))
+    data.frame(
+      idx_big = (r-1)*n_ws + (1:n_ws),
+      y       = y_r
+    )
+  })
+)
+
+
+ res_big <- inla(
+  y ~ 1 +
+    f(idx_big,
+      model       = "bym2",
+      graph       = graph_big,
+      scale.model = TRUE,
+      hyper = list(
+        prec = list(prior="pc.prec", param=c(1,0.5)),
+        phi  = list(prior="pc",      param=c(0.5,0.5))
+      )
+    ),
+  family="poisson",
+  data              = big_data,
+  control.predictor = list(compute=TRUE),
+  control.compute   = list(config=TRUE)
+)
+
+# 6) Extract and back‐transform
+post   <- inla.posterior.sample(res_big, n = 500)
+logtau <- sapply(post, function(x) x$hyperpar["Precision for idx"])
+logitφ <- sapply(post, function(x) x$hyperpar["Phi for idx"])
+tau_rep <- exp(logtau)
+phi_rep <- plogis(logitφ)
+
+cat("Posterior mean τ =", mean(tau_rep), "\n")
+cat("Posterior mean φ =", mean(phi_rep), "\n")
+```
+
+
+
+
+### STAN
+
+```{r}
+
+library(cmdstanr)
+library(posterior)
+library(bayesplot)
+
+
+# -- 2.2 Prepare Stan data list
+stan_data <- list(
+  N      = n_ws,
+  y      = dat$y,               # your one dataset
+  Q_star = as.matrix(Q_star+Diagonal(n_ws,1e-8))
+)
+
+# -- 2.3 Compile and sample
+mod <- cmdstan_model(stan_file = "./bym2.stan")
+fit <- mod$sample(
+  data            = stan_data,
+  chains          = 4,
+  iter_warmup     = 1000,
+  iter_sampling   = 2000,
+  parallel_chains = 4
+)
+
+# -- 2.4 Summarize the hyperparameters
+print(fit, pars = c("tau","phi","intercept"))
+
+# -- 2.5 Plot the posteriors
+post <- as_draws_df(fit$draws(c("tau","phi")))
+# mcmc_areas(post, pars = c("tau","phi")) +
+#   geom_vline(xintercept = c(0.5, 0.1), linetype = "dashed")
+
+mcmc_areas(post, pars = c("phi")) +
+  geom_vline(xintercept = c( 0.9), linetype = "dashed")
+
+mcmc_areas(post, pars = c("tau")) +
+  geom_vline(xintercept = c(0.5), linetype = "dashed")
+```
+
